@@ -1,0 +1,3 @@
+#!/usr/bin/env sh
+# Open a plugin's popup. Actions run outside any pane, so this is their way in.
+exec "${HERDR_BIN_PATH:-herdr}" plugin pane open --plugin "$HERDR_PLUGIN_ID" --entrypoint "${1:-picker}"

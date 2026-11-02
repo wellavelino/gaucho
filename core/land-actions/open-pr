@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Push the branch and open a pull request.
+set -euo pipefail
+case ${1:?verb} in
+  describe) echo "Open a pull request" ;;
+  needs) echo confirm ;;
+  run) exec "$GAUCHO_BIN" pr-open "$GAUCHO_MACHINE" "$GAUCHO_CWD" ;;
+esac

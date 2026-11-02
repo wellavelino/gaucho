@@ -1,0 +1,21 @@
+id = "gaucho.second-opinion"
+name = "Second Opinion"
+version = "0.2.0"
+min_herdr_version = "0.9.1"
+description = "Start a fresh agent to review a finished branch"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Get a second opinion"
+contexts = ["workspace"]
+command = ["sh", "../../core/open"]
+
+[[panes]]
+id = "picker"
+title = "Second Opinion"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bash", "../../core/ui", "review"]

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# GitHub Issues source for Issue Dispatch. See ../README.md for the contract.
+set -euo pipefail
+
+case "$1" in
+  detect) gh repo view --json nameWithOwner >/dev/null 2>&1 ;;
+  list)
+    gh issue list --state open --limit 100 --json number,title,author,labels |
+      jq -r '.[] | [(.number | tostring),
+                    ("#\(.number)  \(.title)  @\(.author.login)  \([.labels[].name] | join(","))" | gsub("[\t\n]"; " "))]
+             | @tsv'
+    ;;
+  show) gh issue view "$2" ;;
+  get) gh issue view "$2" --json title,body,url ;;
+  *) echo "unknown command: $1" >&2; exit 2 ;;
+esac

@@ -1,0 +1,21 @@
+id = "gaucho.agent-inbox"
+name = "Agent Inbox"
+version = "0.2.0"
+min_herdr_version = "0.9.1"
+description = "See which agents on any machine need you, and jump to them"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Open agent inbox"
+contexts = ["workspace"]
+command = ["sh", "../../core/open"]
+
+[[panes]]
+id = "picker"
+title = "Agent Inbox"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bash", "../../core/ui", "inbox"]

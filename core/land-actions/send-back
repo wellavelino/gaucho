@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Return the work to its agent with feedback.
+set -euo pipefail
+case ${1:?verb} in
+  describe) echo "Send back with feedback" ;;
+  needs) echo "input:What should the agent change?" ;;
+  run)
+    [[ -n ${GAUCHO_AGENT_ID:-} ]] || { echo "No agent is running in this worktree." >&2; exit 1; }
+    exec "$GAUCHO_BIN" prompt "$GAUCHO_MACHINE" "$GAUCHO_AGENT_ID" "$GAUCHO_INPUT"
+    ;;
+esac

@@ -1,0 +1,46 @@
+id = "gaucho.issue-dispatch"
+name = "Issue Dispatch"
+version = "0.2.0"
+min_herdr_version = "0.9.1"
+description = "Send issues to agents on any machine, one at a time or from a queue"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Dispatch an issue"
+contexts = ["workspace"]
+command = ["sh", "../../core/open"]
+
+[[panes]]
+id = "picker"
+title = "Issue Dispatch"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bash", "../../core/ui", "dispatch"]
+
+[[actions]]
+id = "queue"
+title = "Show the dispatch queue"
+contexts = ["workspace"]
+command = ["sh", "../../core/open", "queue"]
+
+[[actions]]
+id = "deliver"
+title = "Send waiting briefs"
+contexts = ["workspace"]
+command = ["bash", "../../core/gaucho", "deliver"]
+
+[[panes]]
+id = "queue"
+title = "Dispatch queue"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "60%"
+command = ["bash", "../../core/ui", "queue"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "../../core/gaucho", "tick"]

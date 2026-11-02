@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Flag a working agent whose screen has stopped changing.
+limit=$((${GAUCHO_STUCK_QUIET_MINUTES:-15} * 60000))
+jq -r --argjson limit "$limit" \
+  'select(.quiet_ms >= $limit) | "no new output for \(.quiet_ms / 60000 | floor) min"'

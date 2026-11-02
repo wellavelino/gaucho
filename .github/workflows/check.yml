@@ -1,0 +1,18 @@
+name: Check
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for leaked data
+        run: scripts/leak-scan
+      - name: Lint
+        run: shellcheck -x -s bash -e SC2016,SC2088,SC1010,SC1007 core/gaucho core/ui core/runtimes/* core/forges/* core/sources/* core/detectors/* core/land-actions/* tests/run tests/runtimes/fake
+      - name: Test
+        run: tests/run

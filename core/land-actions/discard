@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Delete the worktree and its branch, including work that was never pushed.
+set -euo pipefail
+case ${1:?verb} in
+  describe) echo "Discard this work" ;;
+  needs) echo confirm ;;
+  run) exec "$GAUCHO_BIN" discard "$GAUCHO_MACHINE" "$GAUCHO_CWD" ;;
+esac

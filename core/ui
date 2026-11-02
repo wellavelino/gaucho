@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Terminal screens for the Herdr plugins. All the logic lives in ./gaucho.
+set -euo pipefail
+
+core=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+gaucho=$core/gaucho
+q=$(printf '%q' "$gaucho")
+
+pause() {
+  printf '\n%s' "${1:-Press any key to close.}"
+  read -r -n 1 -s -t "${2:-30}" </dev/tty || true
+}
+
+guarded() {
+  # Show failures on screen, because a popup closes when its command exits.
+  if ! "$@"; then
+    pause "That did not work. Press any key to close."
+    exit 1
+  fi
+}
+
+context_cwd() {
+  local cwd
+  cwd=$(jq -r '.focused_pane_cwd // .workspace_cwd // empty' <<<"${HERDR_PLUGIN_CONTEXT_JSON:-{\}}")
+  printf '%s\n' "${cwd:-$PWD}"
+}
+
+agent_picker() {
+  local list=$1 header=$2 rows pick
+  rows=$("$gaucho" "$list" --tsv)
+  if [[ -z $rows ]]; then
+    echo "$3"
+    pause "" 3
+    return
+  fi
+  pick=$(printf '%s\n' "$rows" | fzf --delimiter=$'\t' --with-nth=3,5.. --tabstop=2 \
+    --header="$header" \
+    --preview="$q read {1} {2} 60" --preview-window='down,60%,wrap,follow' \
+    --bind="ctrl-r:reload($q $list --tsv)") || return 0
+  "$gaucho" focus "$(cut -f1 <<<"$pick")" "$(cut -f2 <<<"$pick")"
+}
+
+screen_inbox() { agent_picker inbox 'enter: jump · ctrl-r: refresh · esc: close' 'Nothing needs you. No blocked or finished agents.'; }
+screen_fleet() { agent_picker fleet 'enter: jump · ctrl-r: refresh · esc: close' 'No agents are running.'; }
+screen_stuck() { agent_picker stuck 'enter: jump · ctrl-r: refresh · esc: close' 'No agents look stuck.'; }
+
+pick_machine() {
+  "$gaucho" machines | fzf --select-1 --no-sort --header='Which machine should run this?'
+}
+
+screen_dispatch() {
+  local cwd top source quoted issues machine count clone=() id
+  cwd=$(context_cwd)
+  top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || {
+    echo "$cwd is not a Git repository. Focus a pane inside one and try again."
+    pause
+    exit 1
+  }
+  cd "$top"
+  source=$("$gaucho" sources | fzf --select-1 --exit-0 --header='Which issue source?') || {
+    echo "No issue source matches this repository."
+    pause
+    exit 1
+  }
+  quoted=$(printf '%q' "$source")
+  issues=$("$gaucho" source "$source" list | fzf --multi --delimiter=$'\t' --with-nth=2.. \
+    --header='enter: choose · tab: choose several for the queue · esc: cancel' \
+    --preview="$q source $quoted show {1}" --preview-window='down,60%,wrap' | cut -f1) || exit 0
+  [[ -n $issues ]] || exit 0
+  machine=$(pick_machine) || exit 0
+  count=$(wc -l <<<"$issues" | tr -d ' ')
+  if ((count > 1)); then
+    while read -r id; do guarded "$gaucho" queue add "$source" "$id" "$machine" "$top"; done <<<"$issues"
+    "$gaucho" background tick
+    return
+  fi
+  if [[ $machine != local ]]; then
+    gum confirm "Clone this repository on $machine if it is missing?" </dev/tty && clone=(--clone)
+  fi
+  # The popup closes here. A notification reports how the dispatch went.
+  "$gaucho" background dispatch ${clone[@]+"${clone[@]}"} "$source" "$issues" "$machine" "$top"
+}
+
+screen_queue() {
+  local rows pick
+  rows=$("$gaucho" queue list --tsv)
+  if [[ -z $rows ]]; then
+    echo "The queue is empty."
+    pause "" 3
+    return
+  fi
+  while pick=$("$gaucho" queue list --tsv | fzf --delimiter=$'\t' --with-nth=2.. \
+    --header='enter: remove from the queue · esc: close') && [[ -n $pick ]]; do
+    "$gaucho" queue rm "$(cut -f1 <<<"$pick")"
+  done
+}
+
+screen_land() {
+  local rows pick machine cwd agent action name needs input=
+  rows=$("$gaucho" land-list --tsv)
+  if [[ -z $rows ]]; then
+    echo "Nothing to land. No finished agent has work on a branch."
+    pause "" 3
+    return
+  fi
+  pick=$(printf '%s\n' "$rows" | fzf --delimiter=$'\t' --with-nth=5.. --tabstop=2 \
+    --header='enter: choose · esc: close' \
+    --preview="$q land-info {1} {2}" --preview-window='down,60%,wrap') || return 0
+  machine=$(cut -f1 <<<"$pick")
+  cwd=$(cut -f2 <<<"$pick")
+  agent=$(cut -f3 <<<"$pick")
+  action=$("$gaucho" land-actions | fzf --delimiter=$'\t' --with-nth=2 --header='What now?' \
+    --preview="$q land-info $(printf '%q %q' "$machine" "$cwd")" --preview-window='down,60%,wrap') || return 0
+  name=$(cut -f1 <<<"$action")
+  needs=$(cut -f3 <<<"$action")
+  case $needs in
+    confirm) gum confirm "$(cut -f2 <<<"$action")?" </dev/tty || return 0 ;;
+    input:*)
+      input=$(gum write --header "${needs#input:}" --placeholder 'ctrl+d to send, esc to cancel' </dev/tty) || return 0
+      [[ -n $input ]] || return 0
+      ;;
+  esac
+  guarded "$gaucho" land-action "$name" "$machine" "$cwd" "$agent" "$input"
+  pause "Done. Press any key to close." 10
+}
+
+screen_clean() {
+  local rows picks line
+  rows=$("$gaucho" clean-list --tsv)
+  if [[ -z $rows ]]; then
+    echo "No worktrees found."
+    pause "" 3
+    return
+  fi
+  picks=$(printf '%s\n' "$rows" | awk -F'\t' '$6 == "ready"' | fzf --multi --delimiter=$'\t' --with-nth=7.. --tabstop=2 \
+    --header='tab: select · enter: remove · only merged, clean worktrees are listed' \
+    --preview="printf '%s\n' {3}" --preview-window='down,3,wrap') || {
+    printf '%s\n' "Kept:"
+    printf '%s\n' "$rows" | awk -F'\t' '$6 != "ready" { print "  " $7 "  " $8 "  (" $9 ")" }'
+    pause "" 10
+    return 0
+  }
+  [[ -n $picks ]] || return 0
+  gum confirm "Remove $(wc -l <<<"$picks" | tr -d ' ') worktrees and their branches?" </dev/tty || return 0
+  while IFS= read -r line; do
+    guarded "$gaucho" clean "$(cut -f1 <<<"$line")" "$(cut -f3 <<<"$line")"
+  done <<<"$picks"
+  pause "" 5
+}
+
+screen_review() {
+  local rows pick
+  rows=$("$gaucho" land-list --tsv)
+  if [[ -z $rows ]]; then
+    echo "Nothing to review. No finished agent has work on a branch."
+    pause "" 3
+    return
+  fi
+  pick=$(printf '%s\n' "$rows" | fzf --delimiter=$'\t' --with-nth=5.. --tabstop=2 \
+    --header='enter: start a fresh reviewer · esc: close' \
+    --preview="$q land-info {1} {2}" --preview-window='down,60%,wrap') || return 0
+  guarded "$gaucho" review "$(cut -f1 <<<"$pick")" "$(cut -f2 <<<"$pick")" "$(cut -f4 <<<"$pick")"
+  pause "" 3
+}
+
+screen=${1:?screen}
+shift
+"screen_$screen" "$@"

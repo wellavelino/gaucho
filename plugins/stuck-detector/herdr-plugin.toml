@@ -1,0 +1,21 @@
+id = "gaucho.stuck-detector"
+name = "Stuck Detector"
+version = "0.2.0"
+min_herdr_version = "0.9.1"
+description = "Flag agents that stopped making progress"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Show stuck agents"
+contexts = ["workspace"]
+command = ["sh", "../../core/open"]
+
+[[panes]]
+id = "picker"
+title = "Stuck Detector"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bash", "../../core/ui", "stuck"]

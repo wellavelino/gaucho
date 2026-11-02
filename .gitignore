@@ -1,0 +1,6 @@
+# Your settings and state never belong here.
+config.env
+.env
+*.pem
+state/
+*.log

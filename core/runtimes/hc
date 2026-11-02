@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Runtime adapter for herdr-core (hc), which the Herdr desktop app runs on.
+# See docs/extending.md for the contract.
+set -euo pipefail
+
+verb=${1:?verb}
+shift
+
+address() { if [[ $1 == local ]]; then printf '%s\n' "$2"; else printf '%s/%s\n' "$1" "$2"; fi; }
+
+on_args=()
+set_on() {
+  on_args=()
+  if [[ $1 != local ]]; then on_args=(--on "$1"); fi
+}
+
+case $verb in
+  machines)
+    hc machine ls --json | jq -r '.machines[] | select(.temporary != true) | .name'
+    ;;
+  agents)
+    hc ls --json | jq --arg m "$1" '
+      def here: if $m == "local" then (.address | contains("/") | not)
+                else (.address | startswith($m + "/")) end;
+      [.terminals[] | select(.status != null and here) | {
+        id: (.address | sub("^[^/]+/"; "")),
+        status: (if .status == "error" then "blocked" else .status end),
+        kind: (.agent // (.argv[0]? // "agent")),
+        cwd: (.cwd // ""),
+        title: (.title // ""),
+        workspace: (.labels["herdr.space"] // ""),
+        since_ms: .status_ms
+      }]'
+    ;;
+  read)
+    hc read "$(address "$1" "$2")" --lines "$3"
+    ;;
+  focus)
+    # shellcheck disable=SC1010
+    herdr-app do agent.focus "$(jq -cn --arg t "$(address "$1" "$2")" '{"terminal": $t}')" >/dev/null
+    ;;
+  prompt)
+    # hc refuses to type into a blocked program unless --force is given.
+    hc send "$(address "$1" "$2")" "$3" >/dev/null
+    ;;
+  exec)
+    set_on "$1"
+    cwd=$2
+    shift 2
+    exec hc exec ${on_args[@]+"${on_args[@]}"} --cwd "$cwd" -- "$@"
+    ;;
+  worktree-add)
+    machine=$1 checkout=$2 branch=$3 base=$4
+    home=$("$0" exec "$machine" "$checkout" sh -c 'printf %s "$HOME"')
+    # The same place the desktop app's worktree mod uses.
+    path="$home/.herdr/worktrees/$(basename "$checkout")/$branch"
+    "$0" exec "$machine" "$checkout" git worktree add --quiet -b "$branch" "$path" "$base" >&2
+    jq -cn --arg cwd "$path" '{slot: $cwd, cwd: $cwd}'
+    ;;
+  tab-add)
+    jq -cn --arg cwd "$2" '{slot: $cwd, cwd: $cwd}'
+    ;;
+  start)
+    machine=$1 slot=$2 kind=$3 name=$4
+    set_on "$machine"
+    # The desktop app shows any terminal carrying these labels as a space.
+    hc run --bg --keep --json --name "$name" --cwd "$slot" ${on_args[@]+"${on_args[@]}"} \
+      --label "herdr.space=gaucho-$name" --label herdr.tab=work -- "$kind" |
+      jq -r '.address | sub("^[^/]+/"; "")'
+    ;;
+  worktree-remove)
+    "$0" exec "$1" "$2" git worktree remove "$3"
+    ;;
+  notify)
+    # The desktop app has no notify command. The Gaucho mod shows these itself.
+    :
+    ;;
+  *)
+    echo "Unknown verb: $verb" >&2
+    exit 64
+    ;;
+esac

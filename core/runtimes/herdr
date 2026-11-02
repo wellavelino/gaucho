@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Runtime adapter for the Herdr terminal app. See docs/extending.md for the contract.
+set -euo pipefail
+
+herdr=${HERDR_BIN_PATH:-herdr}
+verb=${1:?verb}
+shift
+
+on() {
+  local machine=$1
+  shift
+  if [[ $machine == local ]]; then
+    "$herdr" "$@"
+  else
+    "$herdr" --machine "$machine" "$@"
+  fi
+}
+
+ssh_target() {
+  "$herdr" machine list --json |
+    jq -r --arg m "$1" '.[] | select(.label == $m or .id == $m) | .target'
+}
+
+case $verb in
+  machines)
+    "$herdr" machine list --json | jq -r '.[] | select(.enabled) | .label'
+    ;;
+  agents)
+    on "$1" agent list | jq '[.result.agents[] | {
+      id: .pane_id,
+      status: (.agent_status // "unknown"),
+      kind: (.agent // "agent"),
+      cwd: (.foreground_cwd // .cwd // ""),
+      title: (.terminal_title_stripped // ""),
+      workspace: (.workspace_id // ""),
+      since_ms: null
+    }]'
+    ;;
+  read)
+    on "$1" agent read "$2" --source recent-unwrapped --lines "$3"
+    ;;
+  focus)
+    # A saved machine's panes cannot be shown in the local client from the CLI,
+    # so take over the terminal here instead.
+    if [[ $1 == local ]]; then
+      "$herdr" agent focus "$2" >/dev/null
+    else
+      exec "$herdr" --machine "$1" agent attach "$2"
+    fi
+    ;;
+  prompt)
+    on "$1" agent prompt "$2" "$3" >/dev/null
+    ;;
+  exec)
+    machine=$1
+    cwd=$2
+    shift 2
+    if [[ $machine == local ]]; then
+      cd "$cwd"
+      exec "$@"
+    fi
+    target=$(ssh_target "$machine")
+    [[ -n $target ]] || { echo "No saved machine named $machine." >&2; exit 1; }
+    printf -v remote 'cd %q && exec' "$cwd"
+    for arg in "$@"; do printf -v remote '%s %q' "$remote" "$arg"; done
+    exec ssh -o BatchMode=yes -o ConnectTimeout=5 "$target" "$remote" </dev/null
+    ;;
+  worktree-add)
+    machine=$1 checkout=$2 branch=$3 base=$4 label=$5
+    created=$(on "$machine" worktree create --cwd "$checkout" --branch "$branch" \
+      --base "$base" --label "$label" --no-focus)
+    jq -c '{slot: .result.root_pane.pane_id, cwd: (.result.worktree.path // "")}' <<<"$created"
+    ;;
+  tab-add)
+    machine=$1 cwd=$2 workspace=$3 label=$4
+    args=(tab create --cwd "$cwd" --label "$label" --no-focus)
+    [[ -n $workspace ]] && args+=(--workspace "$workspace")
+    created=$(on "$machine" "${args[@]}")
+    jq -c --arg cwd "$cwd" '{slot: .result.root_pane.pane_id, cwd: $cwd}' <<<"$created"
+    ;;
+  start)
+    machine=$1 slot=$2 kind=$3 name=$4
+    err=
+    for _ in 1 2 3 4 5; do
+      if err=$(on "$machine" agent start "$name" --kind "$kind" --pane "$slot" 2>&1); then
+        printf '%s\n' "$slot"
+        exit 0
+      fi
+      # The agent is up but waiting on a startup question, which only a person answers.
+      if grep -q agent_not_ready <<<"$err"; then
+        printf '%s\n' "$slot"
+        exit 0
+      fi
+      sleep 1
+    done
+    printf '%s\n' "$err" >&2
+    exit 1
+    ;;
+  worktree-remove)
+    machine=$1 repo=$2 path=$3
+    workspace=$(on "$machine" workspace list 2>/dev/null |
+      jq -r --arg p "$path" '[.result.workspaces[]? | select((.worktree.path // "") == $p)][0].workspace_id // empty' || true)
+    if [[ -n $workspace ]]; then
+      on "$machine" worktree remove --workspace "$workspace" >/dev/null
+    else
+      "$0" exec "$machine" "$repo" git worktree remove "$path"
+    fi
+    ;;
+  notify)
+    "$herdr" notification show "$1" --body "$2" >/dev/null
+    ;;
+  *)
+    echo "Unknown verb: $verb" >&2
+    exit 64
+    ;;
+esac

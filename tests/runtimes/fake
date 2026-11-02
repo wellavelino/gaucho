@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# A runtime for tests. Agents live in JSON files; commands run on this machine.
+set -euo pipefail
+verb=$1
+shift
+case $verb in
+  machines) cat "$FAKE/machines" 2>/dev/null || true ;;
+  agents)
+    [[ ! -f $FAKE/down-$1 ]] || exit 1
+    cat "$FAKE/agents-$1.json" 2>/dev/null || echo '[]'
+    ;;
+  read) cat "$FAKE/screen-$2" 2>/dev/null || true ;;
+  focus) echo "focus $1 $2" >>"$FAKE/log" ;;
+  prompt)
+    [[ ! -f $FAKE/refuse-prompt ]] || exit 1
+    printf '%s\n' "prompt $1 $2 $3" >>"$FAKE/log"
+    ;;
+  exec)
+    cd "$2"
+    shift 2
+    exec "$@"
+    ;;
+  worktree-add)
+    path=$FAKE/wt/$(basename "$3")
+    git -C "$2" worktree add --quiet -b "$3" "$path" "$4" >&2
+    jq -cn --arg p "$path" '{slot: "slot", cwd: $p}'
+    ;;
+  tab-add) jq -cn --arg c "$2" '{slot: "tab", cwd: $c}' ;;
+  start)
+    n=$(($(cat "$FAKE/next" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$FAKE/next"
+    echo "a$n"
+    ;;
+  worktree-remove) git -C "$2" worktree remove "$3" ;;
+  notify) echo "notify $1: $2" >>"$FAKE/log" ;;
+esac

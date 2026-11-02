@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Flag an agent whose screen keeps coming back to the same content.
+limit=${GAUCHO_STUCK_REPEATS:-4}
+jq -r --argjson limit "$limit" \
+  'select(.repeats >= $limit) | "repeating itself (\(.repeats) times)"'

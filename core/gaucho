@@ -1,0 +1,906 @@
+#!/usr/bin/env bash
+# Gaucho's engine. Plugins, the desktop mod and your scripts all call this.
+# Run `gaucho help` for the commands and docs/extending.md for extension points.
+set -euo pipefail
+umask 077
+
+self=$(realpath "${BASH_SOURCE[0]}")
+core=$(dirname "$self")
+config_dir=${GAUCHO_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gaucho}
+
+if [[ ${1:-} == --runtime ]]; then
+  GAUCHO_RUNTIME=$2
+  shift 2
+fi
+
+# Your settings stay outside the repository. Plugin config folders are read too.
+for file in "${HERDR_PLUGIN_CONFIG_DIR:-/nonexistent}/config.env" "$config_dir/config.env"; do
+  # shellcheck disable=SC1090
+  [[ -f $file ]] && source "$file"
+done
+agent_kind=${GAUCHO_AGENT:-claude}
+review_kind=${GAUCHO_REVIEW_AGENT:-$agent_kind}
+remote_root=${GAUCHO_REMOTE_ROOT:-'~/code'}
+finish_step=${GAUCHO_FINISH:-Commit your work on this branch and open a pull request that references the issue.}
+pending_ttl_ms=$((${GAUCHO_PENDING_HOURS:-24} * 3600000))
+sample_ms=$((${GAUCHO_STUCK_SAMPLE_SECONDS:-60} * 1000))
+export GAUCHO_STUCK_QUIET_MINUTES GAUCHO_STUCK_LONG_MINUTES GAUCHO_STUCK_REPEATS GAUCHO_PR_DRAFT
+
+fail() {
+  printf '%s\n' "$*" >&2
+  exit 1
+}
+
+now_ms() { printf '%s000\n' "$(date +%s)"; }
+
+# coreutils timeout is missing on stock macOS.
+bounded() {
+  local seconds=$1
+  shift
+  if command -v timeout >/dev/null; then
+    timeout "$seconds" "$@"
+  elif command -v gtimeout >/dev/null; then
+    gtimeout "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+# Find an extension by name. Your folders win over the ones Gaucho ships.
+extension_dirs() {
+  printf '%s\n' "$config_dir/$1"
+  [[ -n ${HERDR_PLUGIN_CONFIG_DIR:-} ]] && printf '%s\n' "$HERDR_PLUGIN_CONFIG_DIR/$1"
+  [[ $1 == sources && -n ${GAUCHO_SOURCES_DIR:-} ]] && printf '%s\n' "$GAUCHO_SOURCES_DIR"
+  printf '%s\n' "$core/$1"
+}
+
+extension() {
+  local dir
+  while read -r dir; do
+    if [[ -x $dir/$2 ]]; then
+      printf '%s\n' "$dir/$2"
+      return 0
+    fi
+  done < <(extension_dirs "$1")
+  return 1
+}
+
+extensions() {
+  local dir file name seen=" "
+  while read -r dir; do
+    for file in "$dir"/*; do
+      [[ -f $file && -x $file ]] || continue
+      name=${file##*/}
+      [[ $seen == *" $name "* ]] && continue
+      seen+="$name "
+      printf '%s\t%s\n' "$name" "$file"
+    done
+  done < <(extension_dirs "$1")
+  return 0
+}
+
+detect_runtime() {
+  if [[ -n ${GAUCHO_RUNTIME:-} ]]; then
+    printf '%s\n' "$GAUCHO_RUNTIME"
+  elif [[ -n ${HERDR_BIN_PATH:-} ]] || command -v herdr >/dev/null; then
+    echo herdr
+  elif command -v hc >/dev/null; then
+    echo hc
+  else
+    fail "No runtime found. Install Herdr or herdr-core, or set GAUCHO_RUNTIME."
+  fi
+}
+
+runtime_path=
+use_runtime() {
+  [[ -n $runtime_path ]] || runtime_path=$(extension runtimes "$(detect_runtime)") || fail "No such runtime: $(detect_runtime)"
+}
+
+# Only focus may touch the terminal. Anything else reading stdin would swallow
+# the lists that loops below feed it.
+rt() {
+  use_runtime
+  if [[ $1 == focus ]]; then
+    "$runtime_path" "$@"
+  else
+    "$runtime_path" "$@" </dev/null
+  fi
+}
+
+# Each runtime keeps its own state: its agents and queue mean nothing to another.
+state=${GAUCHO_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/gaucho/$(detect_runtime)}
+mkdir -p "$state"/{runs,pending,queue,cache,jobs}
+
+slugify() {
+  tr '[:upper:]' '[:lower:]' <<<"$1" | sed -E 's/[^a-z0-9]+/-/g; s/^-+//' | cut -c1-"$2" | sed -E 's/-+$//'
+}
+
+safe_ref() { [[ $1 =~ ^[A-Za-z0-9._/-]+$ && $1 != -* && $1 != *..* ]]; }
+
+machines() {
+  echo local
+  rt machines 2>/dev/null || true
+}
+
+# Everything shown on a screen is stripped of control characters, because
+# titles and paths from agents can carry terminal escape sequences.
+sanitize='def clean: tostring | explode | map(if . < 32 or (. >= 127 and . < 160) then 32 else . end) | implode;'
+
+# ---- Fleet: every agent on every machine ------------------------------------
+
+fetch_machine() {
+  local machine=$1 out=$2 cache
+  cache=$state/cache/$(slugify "$1" 64).json
+  if bounded "${GAUCHO_FETCH_TIMEOUT:-2}" "$runtime_path" agents "$machine" >"$out.raw" 2>/dev/null &&
+    jq -e --arg m "$machine" 'map(. + {machine: $m, stale: false})' <"$out.raw" >"$out" 2>/dev/null; then
+    cp "$out" "$cache.tmp" && mv "$cache.tmp" "$cache"
+  elif [[ -f $cache && -n $(find "$cache" -mmin -2 2>/dev/null) ]]; then
+    # A machine that stops answering keeps its last list for a moment.
+    jq 'map(. + {stale: true})' <"$cache" >"$out"
+  else
+    echo '[]' >"$out"
+  fi
+}
+
+# Print the merged fleet as JSON, and record when each agent changed state.
+fleet_json() {
+  local dir machine i=0 now tracker=$state/tracker.json
+  use_runtime
+  dir=$(mktemp -d)
+  while read -r machine; do
+    i=$((i + 1))
+    fetch_machine "$machine" "$dir/$i.json" &
+  done < <(machines)
+  wait
+  now=$(now_ms)
+  [[ -f $tracker ]] || echo '{}' >"$tracker"
+  jq -s --arg now "$now" --slurpfile tracker "$tracker" "$sanitize"'
+    ($now | tonumber) as $now | ($tracker[0] // {}) as $old
+    | [ .[][] | . as $a | ("\(.machine)/\(.id)") as $key | ($old[$key] // {}) as $t
+        | (if $t.status == .status then ($t.since_ms // $now) else $now end) as $since
+        | . + { key: $key,
+                since_ms: (.since_ms // $since),
+                title: (.title | clean), cwd: (.cwd | clean), kind: (.kind | clean),
+                tracked: ($t + { status: .status, since_ms: $since })
+              }
+        | .stuck = (if .status == "working" then (.tracked.stuck // null) else null end) ]' \
+    "$dir"/*.json >"$dir/merged"
+  jq 'map({key: .key, value: (.tracked | if .status != "working" then del(.stuck, .hashes, .quiet_since, .sampled_ms) else . end)}) | from_entries' \
+    "$dir/merged" >"$tracker.tmp" && mv "$tracker.tmp" "$tracker"
+  merge_runs "$dir/merged"
+  rm -rf "$dir"
+}
+
+merge_runs() {
+  local runs
+  runs=$(shopt -s nullglob; cat /dev/null "$state"/runs/*.json | jq -s .)
+  jq --argjson runs "$runs" '
+    map(. as $a | del(.tracked)
+        | .run = ($runs | map(select(.machine == $a.machine and .id == $a.id))[0] // null))' "$1"
+}
+
+row_tsv() {
+  jq -r "$sanitize"'
+    def age: ((now * 1000 - .since_ms) / 60000 | floor) as $m
+      | if $m < 60 then "\($m)m" else "\($m / 60 | floor)h\($m % 60)m" end;
+    .[] | [ .machine, .id, (.status | ascii_upcase),
+            (if .stale then "stale" else age end),
+            .machine, .kind, (.cwd | split("/") | last // ""),
+            (.run.issue // .run.branch // ""), (.stuck // .title) ]
+    | map(clean) | @tsv'
+}
+
+cmd_fleet() {
+  if [[ ${1:-} == --tsv ]]; then
+    fleet_json | jq 'sort_by({blocked: 0, done: 1, working: 2}[.status] // 3, .machine)' | row_tsv
+  else
+    fleet_json
+  fi
+}
+
+cmd_inbox() {
+  fleet_json | jq 'map(select(.status == "blocked" or .status == "done")) | sort_by(.status != "blocked")' |
+    if [[ ${1:-} == --tsv ]]; then row_tsv; else cat; fi
+}
+
+cmd_stuck() {
+  fleet_json | jq 'map(select(.stuck != null))' |
+    if [[ ${1:-} == --tsv ]]; then row_tsv; else cat; fi
+}
+
+cmd_status() {
+  local fleet queued waiting
+  fleet=$(fleet_json)
+  queued=$(find "$state/queue" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+  waiting=$(find "$state/pending" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+  jq -r --argjson queued "$queued" --argjson waiting "$waiting" '
+    (map(select(.status == "blocked")) | length) as $blocked
+    | (map(select(.status == "done")) | length) as $done
+    | (map(select(.stuck != null)) | length) as $stuck
+    | [ (if $blocked > 0 then "\($blocked) blocked" else empty end),
+        (if $done > 0 then "\($done) done" else empty end),
+        (if $stuck > 0 then "\($stuck) stuck" else empty end),
+        (if $waiting > 0 then "\($waiting) waiting" else empty end),
+        (if $queued > 0 then "\($queued) queued" else empty end) ]
+    | if length > 0 then "⚑ " + join(" · ") else "" end' <<<"$fleet"
+  [[ ${1:-} == --no-work ]] && return
+  # Slow work must not hold up the tab bar, so it runs on and stops by itself.
+  nohup "$self" tick >/dev/null 2>&1 &
+}
+
+# ---- Background work: delivery, stuck detection, the queue ------------------
+
+locked() {
+  local lock=$state/$1.lock
+  shift
+  if [[ -d $lock && -n $(find "$lock" -mmin +10 2>/dev/null) ]]; then rmdir "$lock" 2>/dev/null || true; fi
+  mkdir "$lock" 2>/dev/null || return 0
+  trap 'rmdir "'"$lock"'" 2>/dev/null || true' EXIT
+  "$@"
+}
+
+tick_work() {
+  local fleet
+  fleet=$(fleet_json)
+  deliver_pending "$fleet" || true
+  sample_stuck "$fleet" || true
+  advance_queue "$fleet" || true
+}
+
+cmd_tick() { locked tick bounded "${GAUCHO_TICK_TIMEOUT:-120}" "$self" tick-work; }
+
+agent_status() { jq -r --arg m "$2" --arg i "$3" 'map(select(.machine == $m and .id == $i))[0].status // "gone"' <<<"$1"; }
+
+# Keep a brief until a person has answered any startup question.
+hold_brief() {
+  local name=$1 machine=$2 id=$3 text=$4 file
+  file=$state/pending/$name
+  jq -n --arg machine "$machine" --arg id "$id" --arg name "$name" --arg brief "$text" --arg now "$(now_ms)" \
+    '{machine: $machine, id: $id, name: $name, brief: $brief, held_ms: ($now | tonumber)}' >"$file.tmp"
+  mv "$file.tmp" "$file.json"
+}
+
+deliver_pending() {
+  local fleet=$1
+  local file machine id name brief status held
+  shopt -s nullglob
+  for file in "$state"/pending/*.json; do
+    machine=$(jq -r .machine "$file")
+    id=$(jq -r .id "$file")
+    name=$(jq -r .name "$file")
+    held=$(jq -r .held_ms "$file")
+    status=$(agent_status "$fleet" "$machine" "$id")
+    if [[ $status == idle || $status == "done" ]]; then
+      # Renaming claims the file, so two runs cannot send a brief twice.
+      mv "$file" "$file.sending" 2>/dev/null || continue
+      brief=$(jq -r .brief "$file.sending")
+      if rt prompt "$machine" "$id" "$brief"; then
+        rm -f "$file.sending"
+      else
+        mv "$file.sending" "$file"
+      fi
+    elif (($(now_ms) - held > pending_ttl_ms)); then
+      mv "$file" "${file%.json}.failed"
+      rt notify "Gaucho" "Gave up sending the brief to $name." || true
+    fi
+  done
+}
+
+cmd_deliver() {
+  # Used after a dispatch. Runs until nothing is waiting, or the time limit.
+  local deadline=$(($(date +%s) + ${GAUCHO_DELIVER_SECONDS:-1800}))
+  while (($(date +%s) < deadline)); do
+    [[ -n $(find "$state/pending" -name '*.json' 2>/dev/null) ]] || return 0
+    deliver_pending "$(fleet_json)"
+    sleep 5
+  done
+}
+
+sample_stuck() {
+  local fleet=$1 row key machine id now tracker=$state/tracker.json hash sample name script reason found was
+  use_runtime
+  now=$(now_ms)
+  while IFS= read -r row; do
+    [[ -n $row ]] || continue
+    key=$(jq -r .key <<<"$row")
+    [[ $(jq -r --arg k "$key" '(.[$k].sampled_ms // 0)' "$tracker") -gt $((now - sample_ms)) ]] && continue
+    machine=$(jq -r .machine <<<"$row")
+    id=$(jq -r .id <<<"$row")
+    # Only a hash is kept. Screens can hold secrets, so they are never stored.
+    # Digits and punctuation are dropped so spinners and timers do not count as output.
+    hash=$(bounded 5 "$runtime_path" read "$machine" "$id" 40 2>/dev/null | LC_ALL=C tr -cd 'A-Za-z \n' | cksum | cut -d' ' -f1) || continue
+    jq --arg k "$key" --arg h "$hash" --arg now "$now" '
+      ($now | tonumber) as $now | (.[$k] // {}) as $t
+      | .[$k] = ($t + { sampled_ms: $now,
+                        quiet_since: (if ($t.hashes // [])[-1] == $h then ($t.quiet_since // $now) else $now end),
+                        hashes: ((($t.hashes // []) + [$h])[-20:]) })' "$tracker" >"$tracker.tmp"
+    mv "$tracker.tmp" "$tracker"
+    sample=$(jq -c --arg k "$key" --arg now "$now" --argjson agent "$row" '
+      ($now | tonumber) as $now | .[$k] as $t
+      | ($t.hashes | map(select(. == ($t.hashes[-1]))) | length) as $same
+      | ([ $t.hashes as $h | range(1; $h | length) | select($h[.] != $h[. - 1]) ] | length) as $changes
+      | $agent + { working_ms: ($now - $t.since_ms), quiet_ms: ($now - $t.quiet_since),
+                   repeats: (if $changes >= 2 then $same else 0 end) }' "$tracker")
+    found=
+    while IFS=$'\t' read -r name script; do
+      reason=$("$script" <<<"$sample" 2>/dev/null | head -n 1 || true)
+      if [[ -n $reason ]]; then found=$reason; break; fi
+    done < <(extensions detectors)
+    was=$(jq -r --arg k "$key" '.[$k].stuck // ""' "$tracker")
+    jq --arg k "$key" --arg r "$found" 'if $r == "" then del(.[$k].stuck) else .[$k].stuck = $r end' "$tracker" >"$tracker.tmp"
+    mv "$tracker.tmp" "$tracker"
+    if [[ -n $found && -z $was ]]; then
+      rt notify "Agent may be stuck" "$(jq -r '"\(.kind) on \(.machine): "' <<<"$row")$found" || true
+    fi
+  done < <(jq -c '.[] | select(.status == "working" and (.stale | not))' <<<"$fleet")
+}
+
+# ---- Dispatch ---------------------------------------------------------------
+
+expand_remote() {
+  local machine=$1 path=$2 home
+  if [[ $path == '~/'* ]]; then
+    home=$(rt exec "$machine" / sh -c 'printf %s "$HOME"')
+    printf '%s/%s\n' "$home" "${path#\~/}"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+# Find the checkout on another machine, cloning it if allowed.
+remote_checkout() {
+  local machine=$1 url=$2 name=$3 allow=$4 root path
+  [[ $name =~ ^[A-Za-z0-9._-]+$ ]] || fail "Unsafe repository name: $name"
+  root=$(expand_remote "$machine" "$remote_root")
+  path=$root/$name
+  if ! rt exec "$machine" / test -d "$path/.git"; then
+    [[ $allow == 1 ]] || fail "$name is not at $path on $machine. Dispatch with --clone to clone it there."
+    rt exec "$machine" / git clone --quiet "$url" "$path" >&2 || fail "Could not clone $name on $machine."
+  fi
+  rt exec "$machine" "$path" git fetch --quiet origin >&2 || fail "Could not fetch on $machine."
+  printf '%s\n' "$path"
+}
+
+fill_template() {
+  local name=$1 file text
+  shift
+  file=$config_dir/templates/$name.md
+  [[ -f $file ]] || file=$core/templates/$name.md
+  text=$(<"$file")
+  while (($#)); do
+    text=${text//"{{$1}}"/$2}
+    shift 2
+  done
+  printf '%s\n' "$text"
+}
+
+record_run() {
+  jq -n "$@" '$ARGS.named + {started_ms: (now * 1000 | floor)}' >"$state/runs/$RUN_NAME.tmp"
+  mv "$state/runs/$RUN_NAME.tmp" "$state/runs/$RUN_NAME.json"
+}
+
+# Send now if the agent is ready. Otherwise hold it for the background worker.
+send_or_hold() {
+  local machine=$1 id=$2 name=$3 text=$4 status="" fleet _
+  for _ in 1 2 3 4 5; do
+    fleet=$(fleet_json)
+    status=$(agent_status "$fleet" "$machine" "$id")
+    [[ $status == idle || $status == "done" || $status == blocked ]] && break
+    sleep 2
+  done
+  if [[ $status == idle || $status == "done" ]] && rt prompt "$machine" "$id" "$text"; then
+    echo "Sent to $name on $machine."
+  else
+    hold_brief "$name" "$machine" "$id" "$text"
+    echo "$name on $machine needs you first. The brief follows once it is ready."
+    if command -v "${HERDR_BIN_PATH:-}" >/dev/null 2>&1 && [[ -n ${HERDR_PLUGIN_ID:-} ]]; then
+      "$HERDR_BIN_PATH" plugin action invoke "$HERDR_PLUGIN_ID.deliver" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+cmd_sources() {
+  local name script
+  while IFS=$'\t' read -r name script; do
+    "$script" detect </dev/null >/dev/null 2>&1 && printf '%s\n' "$name"
+  done < <(extensions sources)
+  return 0
+}
+
+cmd_source() {
+  local script
+  script=$(extension sources "$1") || fail "No source named $1."
+  shift
+  exec "$script" "$@"
+}
+
+cmd_dispatch() {
+  local clone=0
+  if [[ ${1:-} == --clone ]]; then clone=1; shift; fi
+  local source=$1 id=$2 machine=$3 cwd=$4 script top issue title body url remote_url repo base branch name
+  local checkout created slot worktree agent text
+  script=$(extension sources "$source") || fail "No source named $source."
+  top=$(git -C "$cwd" rev-parse --show-toplevel) || fail "$cwd is not a Git repository."
+  cd "$top"
+  issue=$("$script" get "$id") || fail "Could not read issue $id from $source."
+  title=$(jq -r .title <<<"$issue")
+  # Keep the closing marker out of reach of whoever wrote the issue.
+  body=$(jq -r '.body // ""' <<<"$issue" | sed 's#</issue#<\\/issue#g')
+  url=$(jq -r '.url // ""' <<<"$issue")
+  remote_url=$(git remote get-url origin) || fail "This repository has no origin remote."
+  repo=$(basename "$remote_url" .git)
+  git fetch --quiet origin || fail "Could not fetch origin."
+  base=$(git ls-remote --symref origin HEAD | sed -nE 's#^ref: refs/heads/([^[:space:]]+)[[:space:]]+HEAD#\1#p')
+  [[ -n $base ]] || fail "Could not find the default branch of origin."
+
+  branch="issue/$(slugify "$id" 20)-$(slugify "$title" 40)"
+  name=$(slugify "issue-$id" 32)
+  text=$(fill_template issue id "$id" title "$title" url "$url" body "$body" finish "$finish_step")
+
+  if [[ $machine == local ]]; then
+    checkout=$top
+  else
+    checkout=$(remote_checkout "$machine" "$remote_url" "$repo" "$clone")
+  fi
+  created=$(rt worktree-add "$machine" "$checkout" "$branch" "origin/$base" "$id") ||
+    fail "Could not create the worktree."
+  slot=$(jq -r .slot <<<"$created")
+  worktree=$(jq -r .cwd <<<"$created")
+  agent=$(rt start "$machine" "$slot" "$agent_kind" "$name") || fail "Could not start $agent_kind."
+  RUN_NAME=$name record_run --arg name "$name" --arg kind issue --arg machine "$machine" --arg id "$agent" \
+    --arg cwd "$worktree" --arg repo "$checkout" --arg branch "$branch" --arg base "$base" \
+    --arg source "$source" --arg issue "$id" --arg title "$title" --arg url "$url"
+  send_or_hold "$machine" "$agent" "$name" "$text"
+}
+
+# ---- Queue ------------------------------------------------------------------
+
+cmd_queue() {
+  local verb=${1:-list}
+  shift || true
+  case $verb in
+    add)
+      local source=$1 id=$2 machine=$3 cwd=$4 script title file
+      script=$(extension sources "$source") || fail "No source named $source."
+      title=$(cd "$cwd" && "$script" get "$id" | jq -r .title)
+      file=$state/queue/$(date +%s)-$$-$RANDOM
+      jq -n --arg source "$source" --arg id "$id" --arg machine "$machine" --arg cwd "$cwd" --arg title "$title" \
+        '$ARGS.named' >"$file.tmp"
+      mv "$file.tmp" "$file.json"
+      ;;
+    list)
+      local file json='[]'
+      shopt -s nullglob
+      for file in "$state"/queue/*.json "$state"/queue/*.failed; do
+        json=$(jq --arg f "$(basename "$file")" --slurpfile item "$file" \
+          '. + [$item[0] + {ref: $f, failed: ($f | endswith(".failed"))}]' <<<"$json")
+      done
+      if [[ ${1:-} == --tsv ]]; then
+        jq -r "$sanitize"'.[] | [.ref, (if .failed then "FAILED" else "queued" end), .machine, .id, .title] | map(clean) | @tsv' <<<"$json"
+      else
+        printf '%s\n' "$json"
+      fi
+      ;;
+    rm)
+      [[ $1 =~ ^[0-9-]+\.(json|failed)$ ]] || fail "No such queue item."
+      rm -f "$state/queue/$1"
+      ;;
+    *) fail "Usage: gaucho queue add|list|rm" ;;
+  esac
+}
+
+machine_limit() {
+  local entry
+  for entry in ${GAUCHO_QUEUE_LIMITS:-}; do
+    [[ ${entry%%=*} == "$1" ]] && { printf '%s\n' "${entry#*=}"; return; }
+  done
+  printf '%s\n' "${GAUCHO_QUEUE_LIMIT:-2}"
+}
+
+# Count this machine's issue runs that are busy, or still waiting on a person.
+active_runs() {
+  local fleet=$1 machine=$2 file status count=0 id name
+  shopt -s nullglob
+  for file in "$state"/runs/*.json; do
+    [[ $(jq -r '.machine + "/" + .kind' "$file") == "$machine/issue" ]] || continue
+    id=$(jq -r .id "$file")
+    name=$(jq -r .name "$file")
+    status=$(agent_status "$fleet" "$machine" "$id")
+    if [[ $status == working || $status == blocked || -f $state/pending/$name.json ]]; then
+      count=$((count + 1))
+    fi
+  done
+  printf '%s\n' "$count"
+}
+
+advance_queue() {
+  local fleet=$1 file machine source id cwd
+  shopt -s nullglob
+  for file in "$state"/queue/*.json; do
+    machine=$(jq -r .machine "$file")
+    (($(active_runs "$fleet" "$machine") < $(machine_limit "$machine"))) || continue
+    source=$(jq -r .source "$file")
+    id=$(jq -r .id "$file")
+    cwd=$(jq -r .cwd "$file")
+    mv "$file" "$file.running" 2>/dev/null || continue
+    if "$self" dispatch "$source" "$id" "$machine" "$cwd" >/dev/null 2>&1; then
+      rm -f "$file.running"
+    else
+      mv "$file.running" "${file%.json}.failed"
+      rt notify "Gaucho" "Queued issue $id failed to start." || true
+    fi
+    fleet=$(fleet_json)
+  done
+}
+
+# ---- Landing ----------------------------------------------------------------
+
+run_for_cwd() {
+  local machine=$1 cwd=$2 file
+  shopt -s nullglob
+  for file in "$state"/runs/*.json; do
+    if jq -e --arg m "$machine" --arg c "$cwd" '.machine == $m and .cwd == $c and .kind == "issue"' "$file" >/dev/null; then
+      cat "$file"
+      return
+    fi
+  done
+  echo null
+}
+
+land_probe='
+branch=$(git branch --show-current)
+base=${1:-}
+[ -n "$base" ] || base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed "s#^origin/##")
+[ -n "$base" ] || base=main
+counts=$(git rev-list --left-right --count "origin/$base...HEAD" 2>/dev/null || echo "0 0")
+printf "%s\n" "$branch" "$base" "$counts" "$(git status --porcelain | wc -l | tr -d " ")" \
+  "$(git rev-parse --show-toplevel)" "$(git remote get-url origin 2>/dev/null)" \
+  "$(git diff --shortstat "origin/$base...HEAD" 2>/dev/null)"
+git log --format=%s "origin/$base..HEAD" 2>/dev/null | head -n 20
+'
+
+# Describe a worktree's branch as JSON.
+land_info() {
+  local machine=$1 cwd=$2 run base output branch counts dirty top url stat subjects
+  run=$(run_for_cwd "$machine" "$cwd")
+  base=$(jq -r '.base // ""' <<<"$run")
+  output=$(rt exec "$machine" "$cwd" sh -c "$land_probe" sh "$base" 2>/dev/null) || return 1
+  branch=$(sed -n 1p <<<"$output")
+  base=$(sed -n 2p <<<"$output")
+  counts=$(sed -n 3p <<<"$output")
+  dirty=$(sed -n 4p <<<"$output")
+  top=$(sed -n 5p <<<"$output")
+  url=$(sed -n 6p <<<"$output")
+  stat=$(sed -n 7p <<<"$output")
+  subjects=$(sed -n '8,$p' <<<"$output")
+  jq -n --arg machine "$machine" --arg cwd "$top" --arg branch "$branch" --arg base "$base" \
+    --arg counts "$counts" --arg dirty "$dirty" --arg url "$url" --arg stat "$stat" --arg subjects "$subjects" \
+    --argjson run "$run" "$sanitize"'{
+      machine: $machine, cwd: $cwd, branch: $branch, base: $base, url: $url,
+      behind: ($counts | split("\t")[0] | split(" ")[0] | tonumber? // 0),
+      ahead: ($counts | gsub("\\s+"; " ") | split(" ")[1] | tonumber? // 0),
+      dirty: ($dirty | tonumber? // 0), stat: ($stat | sub("^ +"; "")),
+      commits: ($subjects | split("\n") | map(select(length > 0) | clean)), run: $run }'
+}
+
+forge_for() {
+  local name script url=$1
+  while IFS=$'\t' read -r name script; do
+    if "$script" detect "$url" </dev/null >/dev/null 2>&1; then
+      printf '%s\n' "$script"
+      return 0
+    fi
+  done < <(extensions forges)
+  return 1
+}
+
+pr_status() {
+  local forge
+  forge=$(forge_for "$1") || { echo null; return; }
+  bounded 10 "$forge" pr-status "$1" "$2" 2>/dev/null || echo null
+}
+
+cmd_land_list() {
+  local fleet row seen=" " key info rows='[]'
+  fleet=$(fleet_json)
+  while IFS= read -r row; do
+    key=$(jq -r '"\(.machine)|\(.cwd)"' <<<"$row")
+    [[ $seen == *" $key "* ]] && continue
+    seen+="$key "
+    info=$(land_info "$(jq -r .machine <<<"$row")" "$(jq -r .cwd <<<"$row")") || continue
+    jq -e '.branch != "" and .branch != .base and (.ahead > 0 or .dirty > 0)' <<<"$info" >/dev/null || continue
+    rows=$(jq --argjson i "$info" --argjson a "$row" '. + [$i + {agent: $a.id, kind: $a.kind, status: $a.status, workspace: $a.workspace}]' <<<"$rows")
+  done < <(jq -c '.[] | select(.status != "working" and (.stale | not))' <<<"$fleet")
+  if [[ ${1:-} == --tsv ]]; then
+    jq -r "$sanitize"'.[] | [.machine, .cwd, .agent, (.workspace // ""), .machine, .branch, "+\(.ahead)", (if .dirty > 0 then "\(.dirty) uncommitted" else "" end), (.run.title // .stat)] | map(clean) | @tsv' <<<"$rows"
+  else
+    printf '%s\n' "$rows"
+  fi
+}
+
+cmd_land_info() {
+  local info pr
+  info=$(land_info "$1" "$2") || fail "$2 on $1 is not a Git worktree."
+  pr=$(pr_status "$(jq -r .url <<<"$info")" "$(jq -r .branch <<<"$info")")
+  info=$(jq --argjson pr "${pr:-null}" '. + {pr: $pr}' <<<"$info")
+  if [[ ${3:-} == --json ]]; then printf '%s\n' "$info"; return; fi
+  jq -r "$sanitize"'
+    "Branch   \(.branch | clean) → \(.base | clean)",
+    "Commits  \(.ahead) ahead, \(.behind) behind",
+    "Changes  \(if .stat == "" then "none committed" else .stat | clean end)",
+    (if .dirty > 0 then "Warning  \(.dirty) uncommitted files" else empty end),
+    (if .pr then "PR       \(.pr.state): \(.pr.url | clean)", "Checks   \(.pr.passed) passed, \(.pr.failed) failed, \(.pr.total) total" else "PR       none" end),
+    "", (.commits[] | "  \(.)")' <<<"$info"
+}
+
+cmd_land_actions() {
+  local name script
+  while IFS=$'\t' read -r name script; do
+    printf '%s\t%s\t%s\n' "$name" "$("$script" describe)" "$("$script" needs)"
+  done < <(extensions land-actions)
+}
+
+cmd_land_action() {
+  local action=$1 machine=$2 cwd=$3 agent=${4:-} input=${5:-} script info
+  script=$(extension land-actions "$action") || fail "No land action named $action."
+  info=$(land_info "$machine" "$cwd") || fail "$cwd on $machine is not a Git worktree."
+  GAUCHO_BIN=$self GAUCHO_MACHINE=$machine GAUCHO_CWD=$cwd GAUCHO_AGENT_ID=$agent GAUCHO_INPUT=$input \
+    GAUCHO_BRANCH=$(jq -r .branch <<<"$info") GAUCHO_BASE=$(jq -r .base <<<"$info") GAUCHO_TEST_CMD=${GAUCHO_TEST_CMD:-} \
+    "$script" run
+}
+
+# The PR text holds commit subjects and the issue link. Nothing about this machine.
+cmd_pr_open() {
+  local machine=$1 cwd=$2 info branch base url forge title body
+  info=$(land_info "$machine" "$cwd") || fail "$cwd on $machine is not a Git worktree."
+  branch=$(jq -r .branch <<<"$info")
+  base=$(jq -r .base <<<"$info")
+  url=$(jq -r .url <<<"$info")
+  safe_ref "$branch" || fail "Unsafe branch name."
+  [[ $(jq -r .dirty <<<"$info") == 0 ]] || fail "This worktree has uncommitted files. Send it back first."
+  [[ $(jq -r .ahead <<<"$info") != 0 ]] || fail "$branch has no commits to land."
+  forge=$(forge_for "$url") || fail "No forge handles this repository's remote."
+  rt exec "$machine" "$cwd" git push --quiet -u origin "$branch" || fail "Could not push $branch."
+  title=$(jq -r '.run.title // .commits[-1] // .branch' <<<"$info")
+  body=$(mktemp "$state/pr.XXXXXX")
+  jq -r '(if .run.url then "Closes \(.run.url)\n" else empty end), (.commits | reverse | map("- \(.)") | join("\n"))' \
+    <<<"$info" >"$body"
+  "$forge" pr-create "$url" "$branch" "$base" "$title" "$body" || { rm -f "$body"; fail "Could not open the pull request."; }
+  rm -f "$body"
+}
+
+forget_run() {
+  local machine=$1 cwd=$2 file
+  shopt -s nullglob
+  for file in "$state"/runs/*.json; do
+    jq -e --arg m "$machine" --arg c "$cwd" '.machine == $m and .cwd == $c' "$file" >/dev/null && rm -f "$file"
+  done
+  return 0
+}
+
+repo_of() {
+  rt exec "$1" "$2" sh -c 'dirname "$(git rev-parse --path-format=absolute --git-common-dir)"'
+}
+
+cmd_discard() {
+  local machine=$1 cwd=$2 info branch repo fleet
+  info=$(land_info "$machine" "$cwd") || fail "$cwd on $machine is not a Git worktree."
+  branch=$(jq -r .branch <<<"$info")
+  safe_ref "$branch" || fail "Unsafe branch name."
+  [[ $branch != "$(jq -r .base <<<"$info")" ]] || fail "Refusing to discard the default branch."
+  fleet=$(fleet_json)
+  jq -e --arg m "$machine" --arg c "$cwd" 'any(.[]; .machine == $m and .cwd == $c and .status == "working")' \
+    <<<"$fleet" >/dev/null && fail "An agent is still working in this worktree."
+  repo=$(repo_of "$machine" "$cwd")
+  [[ $repo != "$cwd" ]] || fail "This is the main checkout, not a worktree."
+  rt exec "$machine" "$repo" git worktree remove --force "$cwd"
+  rt exec "$machine" "$repo" git branch -D "$branch" >/dev/null
+  forget_run "$machine" "$cwd"
+}
+
+# ---- Cleanup ----------------------------------------------------------------
+
+clean_probe='
+base=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed "s#^origin/##")
+[ -n "$base" ] || base=main
+git fetch --quiet --prune origin 2>/dev/null
+merged=$(git branch --merged "origin/$base" --format="%(refname:short)")
+printf "url\t%s\n" "$(git remote get-url origin 2>/dev/null)"
+git worktree list --porcelain | while read -r key value; do
+  case $key in
+    worktree) path=$value ;;
+    branch)
+      branch=${value#refs/heads/}
+      [ "$path" = "$(pwd)" ] && continue
+      dirty=$(git -C "$path" status --porcelain 2>/dev/null | wc -l | tr -d " ")
+      if printf "%s\n" "$merged" | grep -qxF "$branch"; then m=1; else m=0; fi
+      printf "wt\t%s\t%s\t%s\t%s\n" "$path" "$branch" "$dirty" "$m"
+      ;;
+  esac
+done
+'
+
+# Every repository Gaucho knows about, as "machine<TAB>path" lines.
+known_repos() {
+  local fleet=$1 file
+  {
+    shopt -s nullglob
+    for file in "$state"/runs/*.json; do jq -r '[.machine, (.repo // .cwd)] | @tsv' "$file"; done
+    jq -r '.[] | select(.stale | not) | [.machine, .cwd] | @tsv' <<<"$fleet"
+  } | sort -u
+}
+
+clean_rows() {
+  local fleet machine path repo output seen=" " url kind wt branch dirty merged state_ reason ok pr rows='[]'
+  fleet=$(fleet_json)
+  while IFS=$'\t' read -r machine path; do
+    repo=$(repo_of "$machine" "$path" 2>/dev/null) || continue
+    [[ $seen == *" $machine|$repo "* ]] && continue
+    seen+="$machine|$repo "
+    output=$(rt exec "$machine" "$repo" sh -c "$clean_probe" 2>/dev/null) || continue
+    url=
+    while IFS=$'\t' read -r kind wt branch dirty merged; do
+      if [[ $kind == url ]]; then url=$wt; continue; fi
+      [[ $kind == wt ]] || continue
+      ok=false
+      state_=keep
+      if [[ $merged != 1 && -n $url ]]; then
+        pr=$(pr_status "$url" "$branch")
+        [[ $(jq -r '.state // ""' <<<"${pr:-null}") == MERGED ]] && merged=2
+      fi
+      if jq -e --arg m "$machine" --arg p "$wt" 'any(.[]; .machine == $m and (.cwd == $p or (.cwd | startswith($p + "/"))))' <<<"$fleet" >/dev/null; then
+        reason="an agent is here"
+      elif [[ $dirty != 0 ]]; then
+        reason="$dirty uncommitted files"
+      elif [[ $merged == 0 ]]; then
+        reason="not merged"
+      else
+        reason=merged
+        state_=clean
+        ok=true
+      fi
+      rows=$(jq --arg machine "$machine" --arg repo "$repo" --arg path "$wt" --arg branch "$branch" \
+        --arg state "$state_" --arg reason "$reason" --argjson ok "$ok" --arg squashed "$merged" \
+        '. + [{machine: $machine, repo: $repo, path: $path, branch: $branch, state: $state, reason: $reason, removable: $ok, squashed: ($squashed == "2")}]' <<<"$rows")
+    done <<<"$output"
+  done < <(known_repos "$fleet")
+  printf '%s\n' "$rows"
+}
+
+cmd_clean_list() {
+  if [[ ${1:-} == --tsv ]]; then
+    clean_rows | jq -r "$sanitize"'.[] | [.machine, .repo, .path, .branch, .state, (if .removable then "ready" else "keep" end), .machine, .branch, .reason] | map(clean) | @tsv'
+  else
+    clean_rows
+  fi
+}
+
+# Check again right before removing: things change while a list is on screen.
+cmd_clean() {
+  local machine=$1 path=$2 row repo branch
+  row=$(clean_rows | jq -c --arg m "$machine" --arg p "$path" 'map(select(.machine == $m and .path == $p))[0] // empty')
+  [[ -n $row ]] || fail "$path is no longer a worktree on $machine."
+  [[ $(jq -r .removable <<<"$row") == true ]] || fail "$path is not safe to remove: $(jq -r .reason <<<"$row")."
+  repo=$(jq -r .repo <<<"$row")
+  branch=$(jq -r .branch <<<"$row")
+  safe_ref "$branch" || fail "Unsafe branch name."
+  rt worktree-remove "$machine" "$repo" "$path"
+  if [[ $(jq -r .squashed <<<"$row") == true ]]; then
+    # Squash merges leave no ancestry, so git cannot see that the branch landed.
+    rt exec "$machine" "$repo" git branch -D "$branch" >/dev/null
+  else
+    rt exec "$machine" "$repo" git branch -d "$branch" >/dev/null
+  fi
+  forget_run "$machine" "$path"
+  echo "Removed $branch on $machine."
+}
+
+# ---- Second opinion ---------------------------------------------------------
+
+cmd_review() {
+  local machine=$1 cwd=$2 workspace=${3:-} info branch base name created slot agent text
+  info=$(land_info "$machine" "$cwd") || fail "$cwd on $machine is not a Git worktree."
+  branch=$(jq -r .branch <<<"$info")
+  base=$(jq -r .base <<<"$info")
+  name=$(slugify "review-$branch" 32)
+  created=$(rt tab-add "$machine" "$cwd" "$workspace" "review") || fail "Could not open a tab."
+  slot=$(jq -r .slot <<<"$created")
+  agent=$(rt start "$machine" "$slot" "$review_kind" "$name") || fail "Could not start $review_kind."
+  text=$(fill_template review branch "$branch" base "origin/$base")
+  RUN_NAME=$name record_run --arg name "$name" --arg kind review --arg machine "$machine" --arg id "$agent" \
+    --arg cwd "$cwd" --arg branch "$branch" --arg base "$base"
+  send_or_hold "$machine" "$agent" "$name" "$text"
+}
+
+# ---- Jobs: long commands for callers with a time limit, like desktop mods ---
+
+cmd_job() {
+  local id
+  id=$(date +%s)-$$-$RANDOM
+  (
+    if output=$("$self" "$@" 2>&1); then ok=true; else ok=false; fi
+    jq -n --arg command "$1" --arg output "$output" --argjson ok "$ok" '$ARGS.named' >"$state/jobs/$id.tmp"
+    mv "$state/jobs/$id.tmp" "$state/jobs/$id.json"
+  ) >/dev/null 2>&1 &
+  printf '%s\n' "$id"
+}
+
+cmd_jobs() {
+  local file
+  shopt -s nullglob
+  for file in "$state"/jobs/*.json; do
+    cat "$file"
+    rm -f "$file"
+  done | jq -s .
+}
+
+# ---- Background: run after a screen closes, and report through a notification
+
+cmd_background() {
+  local runner=(nohup)
+  # A closing popup takes its process group with it, so leave that group.
+  if command -v setsid >/dev/null; then runner=(setsid nohup); fi
+  "${runner[@]}" "$self" report "$@" >/dev/null 2>&1 </dev/null &
+}
+
+cmd_report() {
+  local output
+  if output=$("$self" "$@" 2>&1); then
+    rt notify "Gaucho" "$(tail -n 1 <<<"$output")" || true
+  else
+    rt notify "Gaucho: that did not work" "$(tail -n 1 <<<"$output")" || true
+  fi
+}
+
+usage() {
+  cat <<'TEXT'
+Usage: gaucho [--runtime NAME] COMMAND
+
+Look       fleet, inbox, stuck, status [--tsv]
+Agents     read M ID LINES, focus M ID, prompt M ID TEXT
+Dispatch   sources, source NAME VERB, dispatch [--clone] SOURCE ID M CWD
+Queue      queue add SOURCE ID M CWD, queue list, queue rm REF
+Land       land-list, land-info M CWD, land-actions, land-action NAME M CWD [AGENT] [INPUT]
+Clean      clean-list, clean M PATH
+Review     review M CWD [WORKSPACE]
+Work       tick, deliver, job COMMAND..., jobs, background COMMAND...
+
+M is "local" or a saved machine. Output is JSON, or tab separated with --tsv.
+TEXT
+}
+
+command=${1:-help}
+shift || true
+case $command in
+  fleet) cmd_fleet "$@" ;;
+  inbox) cmd_inbox "$@" ;;
+  stuck) cmd_stuck "$@" ;;
+  status) cmd_status "$@" ;;
+  machines) machines ;;
+  read) rt read "$1" "$2" "${3:-60}" ;;
+  focus) rt focus "$1" "$2" ;;
+  prompt) rt prompt "$1" "$2" "$3" ;;
+  exec) rt exec "$@" ;;
+  tick) cmd_tick ;;
+  tick-work) tick_work ;;
+  deliver) cmd_deliver ;;
+  sources) cmd_sources ;;
+  source) cmd_source "$@" ;;
+  dispatch) cmd_dispatch "$@" ;;
+  queue) cmd_queue "$@" ;;
+  land-list) cmd_land_list "$@" ;;
+  land-info) cmd_land_info "$@" ;;
+  land-actions) cmd_land_actions ;;
+  land-action) cmd_land_action "$@" ;;
+  pr-open) cmd_pr_open "$@" ;;
+  discard) cmd_discard "$@" ;;
+  clean-list) cmd_clean_list "$@" ;;
+  clean) cmd_clean "$@" ;;
+  review) cmd_review "$@" ;;
+  job) cmd_job "$@" ;;
+  jobs) cmd_jobs ;;
+  background) cmd_background "$@" ;;
+  report) cmd_report "$@" ;;
+  help | --help | -h) usage ;;
+  *) usage >&2; exit 64 ;;
+esac

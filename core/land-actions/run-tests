@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Run your own test command in the worktree. Set GAUCHO_TEST_CMD in config.env.
+set -euo pipefail
+case ${1:?verb} in
+  describe) echo "Run tests" ;;
+  needs) echo none ;;
+  run)
+    [[ -n ${GAUCHO_TEST_CMD:-} ]] || { echo "Set GAUCHO_TEST_CMD in config.env first." >&2; exit 1; }
+    exec "$GAUCHO_BIN" exec "$GAUCHO_MACHINE" "$GAUCHO_CWD" sh -c "$GAUCHO_TEST_CMD"
+    ;;
+esac

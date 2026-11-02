@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Flag an agent that has been working far longer than usual.
+limit=$((${GAUCHO_STUCK_LONG_MINUTES:-60} * 60000))
+jq -r --argjson limit "$limit" \
+  'select(.working_ms >= $limit) | "working for \(.working_ms / 60000 | floor) min"'

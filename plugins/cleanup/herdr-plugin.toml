@@ -1,0 +1,21 @@
+id = "gaucho.cleanup"
+name = "Cleanup"
+version = "0.2.0"
+min_herdr_version = "0.9.1"
+description = "Remove merged worktrees and branches on every machine"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Clean up worktrees"
+contexts = ["workspace"]
+command = ["sh", "../../core/open"]
+
+[[panes]]
+id = "picker"
+title = "Cleanup"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bash", "../../core/ui", "clean"]

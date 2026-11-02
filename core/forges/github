@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Forge for GitHub, using the gh CLI on this machine. See docs/extending.md.
+set -euo pipefail
+
+verb=${1:?verb}
+url=${2:?remote url}
+
+repo() {
+  sed -E 's#^(ssh://)?(git@|https://)([^@/]+@)?github\.com[:/]##; s#\.git$##; s#/$##' <<<"$url"
+}
+
+case $verb in
+  detect)
+    [[ $url == *github.com[:/]* ]] && command -v gh >/dev/null
+    ;;
+  pr-status)
+    branch=${3:?branch}
+    gh pr list -R "$(repo)" --head "$branch" --state all --limit 1 \
+      --json state,url,title,statusCheckRollup | jq -c '
+        (.[0] // null) as $pr
+        | if $pr == null then null else
+            ($pr.statusCheckRollup // []) as $checks
+            | def outcome: (.conclusion // .state // .status // "") | ascii_upcase;
+            { state: $pr.state, url: $pr.url, title: $pr.title,
+              passed: ($checks | map(select(outcome == "SUCCESS" or outcome == "NEUTRAL" or outcome == "SKIPPED")) | length),
+              failed: ($checks | map(select(outcome == "FAILURE" or outcome == "ERROR" or outcome == "TIMED_OUT" or outcome == "CANCELLED")) | length),
+              total: ($checks | length) }
+          end'
+    ;;
+  pr-create)
+    branch=${3:?branch} base=${4:?base} title=${5:?title} body_file=${6:?body file}
+    args=(pr create -R "$(repo)" --head "$branch" --base "$base" --title "$title" --body-file "$body_file")
+    [[ ${GAUCHO_PR_DRAFT:-1} == 1 ]] && args+=(--draft)
+    gh "${args[@]}"
+    ;;
+  *)
+    echo "Unknown verb: $verb" >&2
+    exit 64
+    ;;
+esac
