@@ -44,14 +44,18 @@ case $verb in
       "$herdr" agent focus "$2" >/dev/null
       exit
     fi
-    # The CLI cannot switch your window to another machine, and `--machine`
-    # refuses `agent attach`. So focus the agent there, for when you switch to
-    # that machine, and attach to it here over ssh, where attach is local.
-    on "$1" agent focus "$2" >/dev/null 2>&1 || true
-    target=$(ssh_target "$1")
-    [[ -n $target ]] || { echo "No saved machine named $1." >&2; exit 1; }
-    printf -v remote 'PATH="$HOME/.local/bin:$PATH"; exec herdr agent attach %q' "$2"
-    exec ssh -t "$target" "$remote"
+    # The CLI cannot switch your window to another machine. Focus the agent on
+    # its machine: if you are viewing that machine it is now in front, and if
+    # not it will be when you switch, so say where it is.
+    focused=$(on "$1" agent focus "$2") || exit 1
+    selected=$("$herdr" machine list --json |
+      jq -r --arg m "$1" 'any(.[]; (.label == $m or .id == $m) and .selected)')
+    [[ $selected == true ]] && exit 0
+    space=$(on "$1" workspace list 2>/dev/null |
+      jq -r --arg w "$(jq -r '.result.agent.workspace_id // ""' <<<"$focused")" \
+        '.result.workspaces[]? | select(.workspace_id == $w) | .label // empty' || true)
+    "$herdr" notification show "Agent ready on $1" \
+      --body "Switch to ${space:+$space on }$1 in the sidebar, or prefix+w, to see it." >/dev/null || true
     ;;
   prompt)
     on "$1" agent prompt "$2" "$3" >/dev/null
