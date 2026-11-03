@@ -154,14 +154,18 @@ fetch_machine() {
   local machine=$1 out=$2 cache down
   cache=$state/cache/$(slugify "$1" 64).json
   down=$(down_file "$machine")
-  if ! machine_down "$machine" &&
-    bounded "${GAUCHO_FETCH_TIMEOUT:-2}" "$runtime_path" agents "$machine" >"$out.raw" 2>/dev/null &&
-    jq -e --arg m "$machine" 'map(. + {machine: $m, stale: false})' <"$out.raw" >"$out" 2>/dev/null; then
-    cp "$out" "$cache.tmp" && mv "$cache.tmp" "$cache"
-    rm -f "$down"
-    return
+  if ! machine_down "$machine"; then
+    if bounded "${GAUCHO_FETCH_TIMEOUT:-2}" "$runtime_path" agents "$machine" >"$out.raw" 2>/dev/null; then
+      # It answered, so it is up even if the answer does not parse.
+      rm -f "$down"
+      if jq -e --arg m "$machine" 'map(. + {machine: $m, stale: false})' <"$out.raw" >"$out" 2>/dev/null; then
+        cp "$out" "$cache.tmp" && mv "$cache.tmp" "$cache"
+        return
+      fi
+    elif [[ $machine != local ]]; then
+      touch "$down"
+    fi
   fi
-  [[ $machine == local ]] || machine_down "$machine" || touch "$down"
   if [[ -f $cache && -n $(find "$cache" -mmin -2 2>/dev/null) ]]; then
     # A machine that stops answering keeps its last list for a moment.
     jq 'map(. + {stale: true})' <"$cache" >"$out"

@@ -63,6 +63,17 @@ same "a dead machine is not asked again for a while" "$(grep -c '^box$' "$FAKE/a
 same "reading a dead machine's agent answers at once" "$(g read box b1 10)" "box is not answering."
 rm -f "$FAKE/down-box"
 same "a machine that answers again is back after the wait" "$(GAUCHO_DOWN_SECONDS=0 g fleet | jq length)" 3
+echo 'not json' >"$FAKE/agents-box.json"
+GAUCHO_DOWN_SECONDS=0 g fleet >/dev/null
+same "a machine that answers garbage is not marked down" "$( [[ -f $GAUCHO_STATE_DIR/cache/box.down ]] && echo down || echo up)" up
+agents box "$(agent b1 working)" "$(agent b2 "done")"
+g fleet >"$work/fleet.json"
+rm -f "$FAKE/agent-calls"
+GAUCHO_FLEET_FILE=$work/fleet.json g fleet >/dev/null
+same "a fresh shared fleet file is reused" "$(cat "$FAKE/agent-calls" 2>/dev/null | wc -l | tr -d ' ')" 0
+touch -d '-10 seconds' "$work/fleet.json"
+GAUCHO_FLEET_FILE=$work/fleet.json g fleet >/dev/null
+same "an old shared fleet file is fetched again" "$(sort -u "$FAKE/agent-calls" | tr '\n' ' ')" "box local "
 agents local "$(jq -n '{id: "a1", status: "idle", kind: "claude", cwd: "/tmp", title: "x\u001b]0;pwned\u0007y", workspace: "", since_ms: null}')"
 title=$(g fleet | jq -r '.[] | select(.id == "a1") | .title')
 if LC_ALL=C grep -q $'\033' <<<"$title"; then no "strips escape sequences" "$title"; else ok "strips escape sequences"; fi
