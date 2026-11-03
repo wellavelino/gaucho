@@ -1,4 +1,4 @@
-<img src="docs/assets/banner.png" alt="Gaucho: guide your herd of coding agents" width="100%">
+<img src="docs/banner/banner.png" alt="Gaucho Inbox: see which of your agents needs you, and land their work" width="100%">
 
 # Gaucho
 
@@ -43,7 +43,7 @@ herdr plugin link "$PWD/gaucho/plugins/agent-inbox"
 ## Desktop app
 
 The Herdr desktop app has a different extension system, so it gets a
-[mod](app) on the same engine.
+[popup and badge](app) on the same engine.
 
 ## Commands
 
@@ -63,8 +63,13 @@ plugin's README has the binding format. The prefix is your Herdr prefix key.
 | `prefix+shift+s` | `gaucho.stuck-detector.open` | Stuck agents |
 | `prefix+shift+c` | `gaucho.cleanup.open` | Cleanup |
 
-In the desktop app, bind `mod.open:gaucho`. The [app guide](app) uses
-`ctrl+shift+g`.
+In the desktop app, add these to `~/.config/herdr-app/keys.json` under `global`
+(the [app guide](app) has the popup's own keys):
+
+| Key | Action | Does |
+| --- | --- | --- |
+| `ctrl-shift-g` | `mod.open:gaucho` | Opens the Gaucho popup |
+| `alt-n` | `gaucho-badge.next` | Focuses the agent that has waited longest |
 
 ### Engine
 
@@ -110,8 +115,7 @@ Add `--runtime NAME` before a command to choose a runtime, such as
 | Command | Does |
 | --- | --- |
 | `tests/run` | Runs the engine tests |
-| `scripts/leak-scan` | Checks files for private data |
-| `app/install.sh` | Installs the desktop mod |
+| `app/install.sh` | Installs the desktop mods |
 
 ## Extending
 

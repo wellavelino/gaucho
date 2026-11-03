@@ -21,8 +21,7 @@ agent, runs a command from a repository, or removes work without your say-so.
 agents. Gaucho fences them off, but that is not a guarantee. Titles from agents
 are stripped of terminal escape sequences before display.
 
-**For contributors.** `scripts/leak-scan` and CI reject home paths, private
-addresses, emails, keys and tokens. Personal settings belong in
-`~/.config/gaucho`, never in this repository.
+**For contributors.** Personal settings belong in `~/.config/gaucho`, never in
+this repository.
 
 Report a vulnerability through a private GitHub security advisory, not an issue.

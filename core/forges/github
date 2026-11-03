@@ -27,6 +27,11 @@ case $verb in
               total: ($checks | length) }
           end'
     ;;
+  merged-branches)
+    # One call for the whole repository, instead of one pr-status per branch.
+    gh pr list -R "$(repo)" --state merged --limit "${GAUCHO_MERGED_LIMIT:-500}" \
+      --json headRefName,headRefOid | jq -r '.[] | [.headRefName, .headRefOid] | @tsv'
+    ;;
   pr-create)
     branch=${3:?branch} base=${4:?base} title=${5:?title} body_file=${6:?body file}
     args=(pr create -R "$(repo)" --head "$branch" --base "$base" --title "$title" --body-file "$body_file")

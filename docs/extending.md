@@ -47,6 +47,7 @@ Run on this machine, so a remote machine needs no forge login. `URL` is the
 | `detect URL` | exits 0 if this forge handles the remote |
 | `pr-status URL BRANCH` | prints JSON `state`, `url`, `title`, `passed`, `failed`, `total`, or `null`. `state` is `MERGED` once merged |
 | `pr-create URL BRANCH BASE TITLE BODY_FILE` | opens a pull request |
+| `merged-branches URL` | optional. Prints `BRANCH<TAB>HEAD_COMMIT` per merged pull request, so Cleanup makes one call per repository. Exit non-zero if unsupported, and Cleanup falls back to `pr-status` per branch |
 
 ## Detectors
 
