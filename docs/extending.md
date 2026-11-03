@@ -88,4 +88,40 @@ Status is `idle`, `working`, `blocked`, `done` or `unknown`.
 
 ## The engine
 
-`core/gaucho help` lists its commands. Most print JSON, so you can script it.
+The plugins, the hub and the desktop mods all call `core/gaucho`, and so can
+your scripts. `core/gaucho help` prints a short summary. `M` is
+`local` or a saved machine. Commands print JSON unless they say otherwise, and
+those marked `--tsv` can print tab-separated rows.
+
+| Command | Does |
+| --- | --- |
+| `gaucho fleet [--tsv]` | Lists every agent on every machine |
+| `gaucho inbox [--tsv]` | Lists blocked and finished agents |
+| `gaucho stuck [--tsv]` | Lists agents that look stuck |
+| `gaucho status [--no-work]` | Prints the tab bar summary and starts background work, unless `--no-work` |
+| `gaucho machines` | Lists `local` and enabled machines |
+| `gaucho read M ID [LINES]` | Prints an agent's recent output |
+| `gaucho focus M ID` | Jumps to an agent |
+| `gaucho prompt M ID TEXT` | Sends text to an agent |
+| `gaucho sources` | Lists issue sources for the current repository |
+| `gaucho source NAME VERB [ID]` | Calls a source directly |
+| `gaucho dispatch [--clone] SOURCE ID M CWD` | Sends an issue to a new worktree and agent |
+| `gaucho queue add SOURCE ID M CWD` | Adds an issue to the queue |
+| `gaucho queue list [--tsv]` | Shows the queue |
+| `gaucho queue rm REF` | Removes a queue item |
+| `gaucho land-list [--tsv]` | Lists finished branches |
+| `gaucho land-info M CWD [--json]` | Describes a branch and its pull request |
+| `gaucho land-actions` | Lists landing steps |
+| `gaucho land-action NAME M CWD [AGENT] [INPUT]` | Runs a landing step, with no confirmation |
+| `gaucho review M CWD [WORKSPACE]` | Starts a second-opinion agent |
+| `gaucho clean-list [--tsv]` | Lists worktrees and whether each is safe to remove |
+| `gaucho clean M PATH` | Removes a merged worktree and its branch |
+| `gaucho tick` | Delivers briefs, checks for stuck agents and moves the queue |
+| `gaucho deliver` | Waits and sends held briefs |
+| `gaucho background COMMAND...` | Runs a command detached and reports by notification |
+| `gaucho job COMMAND...` | Runs a command detached for callers with a time limit |
+| `gaucho jobs` | Prints finished job results once |
+| `gaucho help` | Prints a short summary |
+
+Add `--runtime NAME` before a command to choose a runtime, such as
+`gaucho --runtime hc fleet`. Without it, Gaucho picks Herdr, then `hc`.

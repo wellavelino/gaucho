@@ -1,4 +1,4 @@
-<img src="../docs/banner/banner.png" alt="Gaucho Inbox: see which of your agents needs you, and land their work" width="100%">
+<img src="../docs/banner/banner.png" alt="Gaucho: guide your herd of coding agents, in the terminal and on the desktop" width="100%">
 
 # Gaucho for the Herdr desktop app
 

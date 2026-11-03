@@ -1,4 +1,4 @@
-<img src="docs/banner/banner.png" alt="Gaucho Inbox: see which of your agents needs you, and land their work" width="100%">
+<img src="docs/banner/banner.png" alt="Gaucho: guide your herd of coding agents, in the terminal and on the desktop" width="100%">
 
 # Gaucho
 
@@ -112,42 +112,8 @@ In the desktop app, add these to `~/.config/herdr-app/keys.json` under `global`
 
 ### Engine
 
-The plugins and the mod all call `core/gaucho`, and so can your scripts. `M` is
-`local` or a saved machine. Commands print JSON unless they say otherwise, and
-those marked `--tsv` can print tab-separated rows.
-
-| Command | Does |
-| --- | --- |
-| `gaucho fleet [--tsv]` | Lists every agent on every machine |
-| `gaucho inbox [--tsv]` | Lists blocked and finished agents |
-| `gaucho stuck [--tsv]` | Lists agents that look stuck |
-| `gaucho status [--no-work]` | Prints the tab bar summary and starts background work, unless `--no-work` |
-| `gaucho machines` | Lists `local` and enabled machines |
-| `gaucho read M ID [LINES]` | Prints an agent's recent output |
-| `gaucho focus M ID` | Jumps to an agent |
-| `gaucho prompt M ID TEXT` | Sends text to an agent |
-| `gaucho sources` | Lists issue sources for the current repository |
-| `gaucho source NAME VERB [ID]` | Calls a source directly |
-| `gaucho dispatch [--clone] SOURCE ID M CWD` | Sends an issue to a new worktree and agent |
-| `gaucho queue add SOURCE ID M CWD` | Adds an issue to the queue |
-| `gaucho queue list [--tsv]` | Shows the queue |
-| `gaucho queue rm REF` | Removes a queue item |
-| `gaucho land-list [--tsv]` | Lists finished branches |
-| `gaucho land-info M CWD [--json]` | Describes a branch and its pull request |
-| `gaucho land-actions` | Lists landing steps |
-| `gaucho land-action NAME M CWD [AGENT] [INPUT]` | Runs a landing step, with no confirmation |
-| `gaucho review M CWD [WORKSPACE]` | Starts a second-opinion agent |
-| `gaucho clean-list [--tsv]` | Lists worktrees and whether each is safe to remove |
-| `gaucho clean M PATH` | Removes a merged worktree and its branch |
-| `gaucho tick` | Delivers briefs, checks for stuck agents and moves the queue |
-| `gaucho deliver` | Waits and sends held briefs |
-| `gaucho background COMMAND...` | Runs a command detached and reports by notification |
-| `gaucho job COMMAND...` | Runs a command detached for callers with a time limit |
-| `gaucho jobs` | Prints finished job results once |
-| `gaucho help` | Prints a short summary |
-
-Add `--runtime NAME` before a command to choose a runtime, such as
-`gaucho --runtime hc fleet`. Without it, Gaucho picks Herdr, then `hc`.
+Everything above runs one engine, `core/gaucho`. You only need it to script
+Gaucho or extend it: see [the engine commands](docs/extending.md#the-engine).
 
 ### Development
 

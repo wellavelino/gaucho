@@ -1,71 +1,93 @@
 <!doctype html>
-<!-- Source of docs/banner/banner.png. Render: node docs/banner/render.mjs -->
+<!-- Source of docs/banner/banner.png. Render: node docs/banner/render.mjs,
+     or: chromium --headless --hide-scrollbars --window-size=2000,1008 --screenshot=banner.png banner.html -->
 <html><head><meta charset="utf-8"><style>
 *{box-sizing:border-box;margin:0}
 body{width:2000px;height:1008px;overflow:hidden;font-family:Inter,"Segoe UI",system-ui,sans-serif;color:#e8e8e6;
-  background:radial-gradient(circle at 85% 10%,#2a3326 0,transparent 45%),radial-gradient(circle at 0% 100%,#1c2733 0,transparent 40%),#141614;
   background-image:radial-gradient(circle at 85% 10%,#2a3326 0,transparent 45%),radial-gradient(circle at 0% 100%,#1c2733 0,transparent 40%),radial-gradient(#ffffff10 1px,transparent 1px);
   background-size:auto,auto,24px 24px;background-color:#141614;position:relative}
-.mono{font-family:"JetBrains Mono","Fira Code",ui-monospace,monospace}
-.left{position:absolute;left:118px;top:84px;width:800px}
+.mono{font-family:"JetBrainsMono Nerd Font","JetBrains Mono","Fira Code",ui-monospace,monospace}
+.left{position:absolute;left:110px;top:84px;width:760px}
 .pill{display:inline-flex;align-items:center;gap:14px;padding:14px 24px;border:1px solid #2c2f2c;border-radius:40px;background:#1b1d1b;font-size:24px;color:#cfd2cc}
 .dot{width:12px;height:12px;border-radius:50%;background:#7fbf6a}
-h1{font-size:140px;line-height:.92;letter-spacing:-6px;font-weight:800;margin-top:36px}
-h1 .g{color:#8fc072}
-.tag{font-size:34px;line-height:1.4;color:#a9aca6;margin-top:40px;width:760px}
-ul{list-style:none;padding:0;margin-top:36px}
+h1{font-size:150px;line-height:.92;letter-spacing:-6px;font-weight:800;margin-top:40px}
+.tag{font-size:36px;line-height:1.35;color:#a9aca6;margin-top:34px}
+.tag b{color:#8fc072;font-weight:600}
+ul{list-style:none;padding:0;margin-top:40px}
 li{font-size:26px;white-space:nowrap;color:#d6d8d3;margin-bottom:22px;display:flex;align-items:center;gap:22px}
 li:before{content:"✓";color:#8fc072;font-size:28px}
-code{background:#223020;color:#9fd27f;padding:2px 10px;border-radius:6px;font-size:24px}
-.url{position:absolute;left:118px;bottom:66px;font-size:27px;color:#7c7f79}
-.win{position:absolute;background:#191b19;border:1px solid #2e312e;border-radius:18px;box-shadow:0 30px 80px #0009}
-.pop{left:960px;top:96px;width:900px;padding:18px 22px}
-.tabs{display:flex;gap:6px;font-size:22px;margin-bottom:14px}
-.tab{padding:8px 14px;border-radius:9px;color:#c9ccc6}.tab b{color:#6c6f69;font-weight:400;margin-right:8px;font-size:18px}
+.url{position:absolute;left:110px;bottom:66px;font-size:27px;color:#7c7f79}
+.label{position:absolute;font-size:19px;color:#8b8e88;letter-spacing:.5px;display:flex;align-items:center;gap:10px}
+.label i{width:8px;height:8px;border-radius:50%;background:#8fc072}
+
+/* Desktop popup */
+.win{position:absolute;background:#191b19;border:1px solid #2e312e;border-radius:18px;box-shadow:0 30px 80px #000a}
+.pop{left:880px;top:110px;width:640px;padding:16px 18px}
+.tabs{display:flex;gap:4px;font-size:19px;margin-bottom:12px}
+.tab{padding:7px 11px;border-radius:9px;color:#c9ccc6}.tab b{color:#6c6f69;font-weight:400;margin-right:7px;font-size:16px}
 .tab.on{background:#2a2d2a;color:#fff}
-.row{display:flex;align-items:center;gap:16px;padding:14px 16px;border-radius:10px;border-left:4px solid}
+.row{padding:11px 14px;border-radius:10px;border-left:4px solid;margin-bottom:2px}
 .row.sel{background:#262a26}
-.row .t{font-size:24px;color:#ececea}.row .d{font-size:19px;color:#80837d;margin-top:4px}
-.row .k{margin-left:auto;font-size:18px;color:#6c6f69}
+.row .t{font-size:20px;color:#ececea}.row .d{font-size:16px;color:#80837d;margin-top:3px}
 .blocked{border-color:#e0a24a}.done{border-color:#7fbf6a}.stuck{border-color:#d9645a}
-.hint{font-size:17px;color:#6c6f69;padding:12px 16px 2px}
-.land{left:1330px;top:660px;width:600px;padding:26px 30px}
-.land h3{font-size:24px;font-weight:500}.land .d{font-size:18px;color:#80837d;margin:8px 0 20px}
-.btns{display:flex;gap:10px;flex-wrap:wrap}.btn{padding:10px 16px;border-radius:9px;background:#262926;font-size:19px}
-.btn.x{color:#e0a24a}
-.fb{display:flex;gap:10px;margin-top:16px}.in{flex:1;border:1px solid #333733;border-radius:9px;padding:10px 14px;font-size:19px;color:#777a74;background:#121412}
-.btn.w{background:#f2f2ef;color:#111}
-.badge{left:960px;top:880px;white-space:nowrap;padding:16px 22px;font-size:21px;display:flex;gap:12px;align-items:center;border-radius:14px}
-.badge i{width:10px;height:10px;border-radius:50%;display:inline-block}
+.card{margin-top:12px;padding:16px 16px;border:1px solid #2c2f2c;border-radius:12px;background:#151715}
+.card .d{font-size:15px;color:#80837d;margin-bottom:12px}
+.btns{display:flex;gap:8px}.btn{padding:8px 13px;border-radius:9px;background:#262926;font-size:16px}
+.btn.x{color:#e0a24a}.btn.w{background:#f2f2ef;color:#111}
+.fb{display:flex;gap:8px;margin-top:10px}.in{flex:1;border:1px solid #333733;border-radius:9px;padding:8px 12px;font-size:16px;color:#777a74;background:#121412}
+
+/* Terminal window with the TUI hub */
+.term{left:1230px;top:598px;width:730px;border-radius:12px;background:#191a1c;border:1px solid #2f3136;overflow:hidden}
+.bar{height:34px;display:flex;align-items:center;gap:8px;padding:0 14px;background:#202125;border-bottom:1px solid #2f3136}
+.bar i{width:11px;height:11px;border-radius:50%;background:#3a3c42}
+.bar span{margin-left:auto;margin-right:auto;font-size:14px;color:#7d8088}
+.screen{padding:14px 16px 16px;font-size:16.5px;line-height:1.55;color:#dde0e6;white-space:pre}
+.box{border:1.5px solid #4b4f57;border-radius:8px;padding:6px 10px 10px;position:relative}
+.box .lbl{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:#191a1c;padding:0 8px;color:#dde0e6}
+.ton{background:#8ed4a0;color:#191a1c;font-weight:700}
+.b{background:#dde0e6;color:#191a1c}.bg{background:#8ed4a0;color:#191a1c}.br{background:#ff7888;color:#191a1c}
+.r{color:#ff7888;font-weight:700}.g{color:#8ed4a0;font-weight:700}.y{color:#e8da50}.c{color:#45d8e8}.m{color:#9ca3ac}.gr{color:#8ed4a0}
+.sel2{background:#2d2f36}
+.sep{color:#4b4f57}
 </style></head><body>
 <div class="left">
-  <div class="pill mono"><span class="dot"></span>A mod for Herdr</div>
-  <h1>Gaucho<br><span class="g">Inbox</span></h1>
-  <p class="tag">See which of your fifteen agents needs you, and land their work.</p>
+  <div class="pill mono"><span class="dot"></span>Plugins for Herdr</div>
+  <h1>Gaucho</h1>
+  <p class="tag">Guide your herd of coding agents, <b>in the terminal and on the desktop.</b></p>
   <ul>
-    <li>Blocked, done and stuck agents, longest wait first</li>
-    <li>Dispatch an issue to any machine from one popup</li>
-    <li>Jump to the next agent with <code class="mono">alt-n</code></li>
+    <li>See which agents need you, on every machine</li>
+    <li>Send issues to agents, now or from a queue</li>
+    <li>Land finished work: PR, second opinion, send back</li>
+    <li>Spot stuck agents and clean merged worktrees</li>
   </ul>
 </div>
 <div class="url mono">github.com/wellavelino/gaucho</div>
 
+<div class="label mono" style="left:884px;top:72px"><i></i>Herdr desktop app</div>
 <div class="win pop">
-  <div class="tabs"><span class="tab on"><b>1</b>Inbox 5</span><span class="tab"><b>2</b>Dispatch 2</span><span class="tab"><b>3</b>Land</span><span class="tab"><b>4</b>Stuck 1</span><span class="tab"><b>5</b>Clean</span></div>
-  <div class="row blocked sel"><div><div class="t">Add retry to webhook sender</div><div class="d">waiting 14m · box-2 · claude</div></div><span class="k mono">↵ focus</span></div>
-  <div class="row blocked"><div><div class="t">Migrate settings to TOML</div><div class="d">waiting 3m · claude</div></div></div>
-  <div class="row done"><div><div class="t">Fix flaky search test</div><div class="d">done 22m ago · codex</div></div><span class="k mono">l land</span></div>
-  <div class="row done"><div><div class="t">Dark mode for the badge</div><div class="d">done 6m ago · box-1 · claude</div></div></div>
-  <div class="row stuck"><div><div class="t">Speed up the crawler</div><div class="d">quiet 31m · same screen 20m · claude</div></div></div>
-  <div class="hint mono">1-5 tabs · ↑↓ select · ↵ open · l land · esc close</div>
+  <div class="tabs"><span class="tab on"><b>1</b>Inbox 4</span><span class="tab"><b>2</b>Dispatch 2</span><span class="tab"><b>3</b>Land 2</span><span class="tab"><b>4</b>Stuck 1</span><span class="tab"><b>5</b>Clean</span></div>
+  <div class="row blocked sel"><div class="t">Add retry to webhook sender</div><div class="d">waiting 14m · box-2 · claude</div></div>
+  <div class="row done"><div class="t">Fix flaky search test</div><div class="d">done 22m ago · codex</div></div>
+  <div class="row stuck"><div class="t">Speed up the crawler</div><div class="d">quiet 31m · same screen 20m · claude</div></div>
+  <div class="card">
+    <div class="d mono">local · fix/flaky-search · +3 · 2 files, +41 −12</div>
+    <div class="btns"><span class="btn">Open PR</span><span class="btn">Second opinion</span><span class="btn x">Discard</span></div>
+    <div class="fb"><span class="in">What should the agent change?</span><span class="btn w">Send back</span></div>
+  </div>
 </div>
 
-<div class="win land">
-  <h3>Fix flaky search test</h3>
-  <div class="d mono">local · fix/flaky-search · +3 · 2 files, +41 −12</div>
-  <div class="btns"><span class="btn">Open PR</span><span class="btn">Second opinion</span><span class="btn x">Discard</span></div>
-  <div class="fb"><span class="in">What should the agent change?</span><span class="btn w">Send back</span></div>
+<div class="label mono" style="left:1234px;top:560px"><i></i>Herdr terminal</div>
+<div class="win term">
+  <div class="bar"><i></i><i></i><i></i><span class="mono">ctrl+s a</span></div>
+  <div class="screen mono"><div class="box"><span class="lbl">Gaucho</span><span class="m"> 1 Inbox </span> <span class="m"> 2 Fleet 9 </span> <span class="m"> 3 Stuck 1 </span> <span class="m"> 4 Queue 3 </span> <span class="ton"> 5 Land 2 </span> <span class="m"> 6 Clean </span>
+<span class="bg"> o Open PR </span>  <span class="b"> s Send back </span>  <span class="b"> r Second opinion </span>  <span class="br"> x Discard </span>
+<span class="sel2"><span class="gr">▌</span> <span class="c">local  </span> <span class="gr">fix/flaky-search      </span> +3  Fix flaky search test  </span>
+<span class="gr">▌</span> <span class="c">box-2  </span> <span class="gr">feat/badge-dark-mode  </span> +7  <span class="y">1 uncommitted</span>
+<span class="sep">──────────────────────────────────────────────────────────</span>
+<span class="y">Branch</span>   fix/flaky-search → main
+<span class="y">Commits</span>  3 ahead, 0 behind
+<span class="y">PR</span>       none
+  <span class="m">Retry the search index before asserting</span>
+  <span class="m">Wait for the debounce in the search test</span></div></div>
 </div>
-
-<div class="win badge"><i style="background:#e0a24a"></i>2 blocked · <i style="background:#7fbf6a"></i>2 done · <i style="background:#d9645a"></i>1 stuck</div>
 </body></html>
