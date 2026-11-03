@@ -11,9 +11,8 @@ mkdir -p "$popup" "$badge"
 rm -rf "$popup/core"
 cp "$root/app/mods/gaucho/main.js" "$root/app/mods/gaucho/mod.json" "$root/app/mods/gaucho/logic.js" "$popup/"
 cp -R "$root/core" "$popup/core"
-cp "$root/app/mods/gaucho-badge/main.js" "$root/app/mods/gaucho-badge/mod.json" "$badge/"
-# The badge ships the same pure logic as the popup.
-cp "$root/app/mods/gaucho/logic.js" "$badge/logic.js"
+# The badge's logic.js is a tracked copy of the popup's; tests/ui.test.mjs keeps them equal.
+cp "$root/app/mods/gaucho-badge/main.js" "$root/app/mods/gaucho-badge/mod.json" "$root/app/mods/gaucho-badge/logic.js" "$badge/"
 
 if command -v herdr-app >/dev/null 2>&1; then
   herdr-app check "$popup"

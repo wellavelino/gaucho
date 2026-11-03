@@ -60,6 +60,8 @@ Run `app/install.sh` again after updating Gaucho.
 - Delivery, stuck detection and the queue run while the app is open. The badge
   runs them; without the badge, the open popup does.
 - The sidebar keeps Herdr's own sort (status first). Gaucho does not reorder it.
+- The popup's Inbox also lists stuck agents and sorts by wait. The terminal Agent
+  Inbox plugin lists only blocked and done agents.
 - The mods use the `hc` runtime and keep their own state, separate from the plugins.
 - Gaucho only sees agents that report status (OSC 7501).
 - Dispatch reads issues from the focused local repository. A focused remote space

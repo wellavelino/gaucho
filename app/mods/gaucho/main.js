@@ -1,5 +1,6 @@
-// Gaucho for the Herdr desktop app. A thin view: all logic lives in core/gaucho,
-// the same engine the terminal plugins use, so the two can never disagree.
+// Gaucho for the Herdr desktop app. A view over core/gaucho, the engine the
+// terminal plugins use: every action runs the engine. One difference: the Inbox
+// here also lists stuck agents and sorts by wait, which the plugin's inbox does not.
 // Ordering, labels and the key map live in ./logic.js (tested by node, tests/ui.test.mjs).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
@@ -128,6 +129,7 @@ export default class Gaucho extends View {
     cx.spawn(async (cx) => {
       try {
         this.machines = (await gaucho("machines")).split("\n").filter(Boolean);
+        this.sources = [];
         if (!cwd) return;
         const r = await exec("bash", [engine(), "--runtime", "hc", "sources"], { cwd });
         this.sources = r.stdout.split("\n").filter(Boolean);
@@ -156,6 +158,7 @@ export default class Gaucho extends View {
 
   // Dispatch rows depend on how deep the breadcrumb is.
   dispatchRows() {
+    if (!this.folder()) return [];
     if (this.issue) return this.machines;
     if (this.source) return this.issues;
     return this.sources;
@@ -393,14 +396,15 @@ export default class Gaucho extends View {
     return v_flex().gap(8).children(this.land.map((item, i) => {
       const id = `${item.machine}:${item.cwd}`;
       const input = this.feedbackFor(id);
-      const sendBack = (cx) => {
+      // Takes the current card: the submit handler outlives this render.
+      const sendBack = (card, cx) => {
         const text = input.value();
         if (!text) return;
-        this.start(cx, "land-action", "send-back", item.machine, item.cwd, item.agent, text);
+        this.start(cx, "land-action", "send-back", card.machine, card.cwd, card.agent, text);
         input.set_value?.("");
       };
       if (!input.submitBound) {
-        input.on("submit", (_e, cx) => { const card = this.land?.find((x) => `${x.machine}:${x.cwd}` === id); if (card) sendBack(cx); cx.notify(); });
+        input.on("submit", (_e, cx) => { const card = this.land?.find((x) => `${x.machine}:${x.cwd}` === id); if (card) sendBack(card, cx); cx.notify(); });
         input.submitBound = true;
       }
       return v_flex().id(`gaucho-l-${id}`).p(8).gap(6).rounded(6).bg(i === this.sel ? t.selected : t.raised)
@@ -422,7 +426,7 @@ export default class Gaucho extends View {
             .border_color(t.input).bg(t.background).cursor_text()
             .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
             .child(Input.new(input).h_full()))
-          .child(this.button(`gaucho-sb-${id}`, "Send back", (_e, cx) => { sendBack(cx); cx.notify(); })));
+          .child(this.button(`gaucho-sb-${id}`, "Send back", (_e, cx) => { sendBack(item, cx); cx.notify(); })));
     }));
   }
 
