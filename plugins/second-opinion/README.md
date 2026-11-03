@@ -10,3 +10,8 @@ Change the brief by copying `core/templates/review.md` to
 The reviewer shares the worktree and is told not to edit it. That is an
 instruction, not a sandbox, so only review while the first agent is idle.
 Bind `gaucho.second-opinion.open` to a key.
+
+## Requirements
+
+Needs `git`, `jq`, `fzf` and `gum` on the machine running Herdr. See
+[Requirements](../../README.md#requirements) for install commands.

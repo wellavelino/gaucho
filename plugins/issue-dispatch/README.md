@@ -8,6 +8,11 @@ gives it the issue as a brief.
   Gaucho waits. It never answers for you. The brief is sent once the agent is
   ready, for up to 24 hours (`GAUCHO_PENDING_HOURS`).
 
+## Requirements
+
+Needs `git`, `jq`, `fzf`, `gum` and `gh` on the machine running Herdr. See
+[Requirements](../../README.md#requirements) for install commands.
+
 ## Queue
 
 The queue starts the next issue when a machine has room. The limit is 2 agents

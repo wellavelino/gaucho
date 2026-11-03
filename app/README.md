@@ -21,6 +21,10 @@ Colours come from the app theme, so a theme change restyles both.
 
 ## Install
 
+The mods run the same engine, so this machine needs `git` and `jq`, plus `gh`
+for GitHub issues and pull requests. They don't use `fzf` or `gum`. See
+[Requirements](../README.md#requirements).
+
 ```sh
 app/install.sh
 ```

@@ -14,3 +14,8 @@ changes, uncommitted files and pull request checks, then lets you:
 
 Add your own actions: see [Extending Gaucho](../../docs/extending.md).
 Bind `gaucho.landing.open` to a key.
+
+## Requirements
+
+Needs `git`, `jq`, `fzf`, `gum` and `gh` on the machine running Herdr. See
+[Requirements](../../README.md#requirements) for install commands.

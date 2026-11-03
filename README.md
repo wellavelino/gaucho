@@ -19,10 +19,39 @@ ones need you and gets you there quickly.
 | [Stuck Detector](plugins/stuck-detector) | Flags agents that stopped making progress. |
 | [Cleanup](plugins/cleanup) | Removes merged worktrees and branches on every machine. |
 
+## Requirements
+
+Gaucho is bash, and it needs these on the machine where you run Herdr:
+
+| Tool | Used for | Needed by |
+| --- | --- | --- |
+| `git` | worktrees, branches, landing | everything |
+| `jq` | all of Gaucho's data, which is JSON | everything, including the tab bar and the desktop app |
+| `fzf` | the picker screens | the terminal plugins |
+| `gum` | confirm prompts and the send-back box | the terminal plugins |
+| `gh` | GitHub issues and pull requests, signed in with `gh auth login` | Issue Dispatch, Landing, Cleanup. Optional with your own [sources and forges](docs/extending.md) |
+
+Herdr does not install them for you. Without `jq` the screens fail and the tab
+bar entry stays empty. Install them first:
+
+```sh
+# Arch
+sudo pacman -S git jq fzf gum github-cli
+# macOS
+brew install git jq fzf gum gh
+# Debian and Ubuntu: gum and gh come from their own apt repositories,
+# see github.com/charmbracelet/gum and cli.github.com
+sudo apt install git jq fzf
+```
+
+Saved machines that only run agents need just `git` and `sh`, and SSH access
+from the machine running Herdr. Gaucho runs where you sit, not where the
+agents are.
+
 ## Install
 
-You need `jq`, `git`, `fzf` and `gum`. Review a plugin before installing it:
-Herdr plugins run as your user and are not sandboxed.
+Review a plugin before installing it: Herdr plugins run as your user and are
+not sandboxed.
 
 ```sh
 herdr plugin install wellavelino/gaucho/plugins/agent-inbox

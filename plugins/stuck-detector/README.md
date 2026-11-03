@@ -15,3 +15,8 @@ needs the tab bar entry from [Agent Inbox](../agent-inbox).
 
 Add your own detector: see [Extending Gaucho](../../docs/extending.md).
 Bind `gaucho.stuck-detector.open` to a key.
+
+## Requirements
+
+Needs `git`, `jq`, `fzf` and `gum` on the machine running Herdr. See
+[Requirements](../../README.md#requirements) for install commands.

@@ -8,6 +8,11 @@ Press Enter to jump. A local agent is focused in place. An agent on a saved
 machine opens as an attached terminal in the popup, because Herdr cannot switch
 your client to another machine from the CLI.
 
+## Requirements
+
+Needs `git`, `jq`, `fzf` and `gum` on the machine running Herdr. See
+[Requirements](../../README.md#requirements) for install commands.
+
 ## Key
 
 ```toml

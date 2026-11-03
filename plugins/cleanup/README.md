@@ -6,3 +6,8 @@ the pull request merged. Each one is checked again just before removal.
 
 It deletes the local worktree and branch. It never touches remote branches.
 Bind `gaucho.cleanup.open` to a key.
+
+## Requirements
+
+Needs `git`, `jq`, `fzf`, `gum` and `gh` on the machine running Herdr. See
+[Requirements](../../README.md#requirements) for install commands.
