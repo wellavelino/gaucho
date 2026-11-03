@@ -134,13 +134,35 @@ sanitize='def clean: tostring | explode | map(if . < 32 or (. >= 127 and . < 160
 
 # ---- Fleet: every agent on every machine ------------------------------------
 
+# Seconds since a file last changed (GNU stat, then BSD stat on macOS).
+age_s() {
+  local mtime
+  mtime=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1")
+  echo $(($(date +%s) - mtime))
+}
+
+# A saved machine that did not answer is skipped for a while, so every screen
+# does not wait out its timeout again.
+down_file() { printf '%s/cache/%s.down\n' "$state" "$(slugify "$1" 64)"; }
+machine_down() {
+  local down
+  down=$(down_file "$1")
+  [[ $1 != local && -f $down ]] && (($(age_s "$down") < ${GAUCHO_DOWN_SECONDS:-30}))
+}
+
 fetch_machine() {
-  local machine=$1 out=$2 cache
+  local machine=$1 out=$2 cache down
   cache=$state/cache/$(slugify "$1" 64).json
-  if bounded "${GAUCHO_FETCH_TIMEOUT:-2}" "$runtime_path" agents "$machine" >"$out.raw" 2>/dev/null &&
+  down=$(down_file "$machine")
+  if ! machine_down "$machine" &&
+    bounded "${GAUCHO_FETCH_TIMEOUT:-2}" "$runtime_path" agents "$machine" >"$out.raw" 2>/dev/null &&
     jq -e --arg m "$machine" 'map(. + {machine: $m, stale: false})' <"$out.raw" >"$out" 2>/dev/null; then
     cp "$out" "$cache.tmp" && mv "$cache.tmp" "$cache"
-  elif [[ -f $cache && -n $(find "$cache" -mmin -2 2>/dev/null) ]]; then
+    rm -f "$down"
+    return
+  fi
+  [[ $machine == local ]] || machine_down "$machine" || touch "$down"
+  if [[ -f $cache && -n $(find "$cache" -mmin -2 2>/dev/null) ]]; then
     # A machine that stops answering keeps its last list for a moment.
     jq 'map(. + {stale: true})' <"$cache" >"$out"
   else
@@ -151,6 +173,11 @@ fetch_machine() {
 # Print the merged fleet as JSON, and record when each agent changed state.
 fleet_json() {
   local dir machine i=0 now tracker=$state/tracker.json
+  # A screen that needs the fleet several times in a row (the hub) shares one fetch.
+  if [[ -n ${GAUCHO_FLEET_FILE:-} && -s $GAUCHO_FLEET_FILE ]] && (($(age_s "$GAUCHO_FLEET_FILE") < 3)); then
+    cat "$GAUCHO_FLEET_FILE"
+    return
+  fi
   use_runtime
   dir=$(mktemp -d)
   while read -r machine; do
@@ -960,7 +987,11 @@ case $command in
   stuck) cmd_stuck "$@" ;;
   status) cmd_status "$@" ;;
   machines) machines ;;
-  read) rt read "$1" "$2" "${3:-60}" ;;
+  read)
+    if machine_down "$1"; then echo "$1 is not answering."; exit 0; fi
+    use_runtime
+    bounded "${GAUCHO_READ_TIMEOUT:-4}" "$runtime_path" read "$1" "$2" "${3:-60}" </dev/null || echo "Could not read this agent."
+    ;;
   focus) rt focus "$1" "$2" ;;
   prompt) rt prompt "$1" "$2" "$3" ;;
   exec) rt exec "$@" ;;

@@ -6,6 +6,7 @@ shift
 case $verb in
   machines) cat "$FAKE/machines" 2>/dev/null || true ;;
   agents)
+    echo "$1" >>"$FAKE/agent-calls"
     [[ ! -f $FAKE/down-$1 ]] || exit 1
     cat "$FAKE/agents-$1.json" 2>/dev/null || echo '[]'
     ;;

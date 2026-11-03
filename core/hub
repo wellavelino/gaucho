@@ -129,7 +129,10 @@ cmd_list() {
       ;;
   esac
   printf '%s\n' "$tab" >"$state/tab"
-  fleet=$("$gaucho" fleet 2>/dev/null) || fleet='[]'
+  # Fetch the fleet once; the rows and Land reuse it through GAUCHO_FLEET_FILE.
+  fleet=$(GAUCHO_FLEET_FILE= "$gaucho" fleet 2>/dev/null) || fleet='[]'
+  printf '%s\n' "$fleet" >"$state/fleet.json"
+  export GAUCHO_FLEET_FILE=$state/fleet.json
   queued=$("$gaucho" queue list 2>/dev/null | jq 'map(select(.failed | not)) | length' 2>/dev/null) || queued=0
   counts=$(jq -c --argjson q "${queued:-0}" '{
       inbox: map(select(.status == "blocked" or .status == "done")) | length,
