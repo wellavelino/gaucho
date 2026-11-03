@@ -37,7 +37,7 @@ agent_picker() {
     --header="$header" \
     --preview="$q read {1} {2} 60" --preview-window='down,60%,wrap,follow' \
     --bind="ctrl-r:reload($q $list --tsv)") || return 0
-  "$gaucho" focus "$(cut -f1 <<<"$pick")" "$(cut -f2 <<<"$pick")"
+  guarded "$gaucho" focus "$(cut -f1 <<<"$pick")" "$(cut -f2 <<<"$pick")"
   jumped=1
 }
 

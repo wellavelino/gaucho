@@ -5,8 +5,9 @@ enabled saved machine. A machine that stops answering keeps its last list for
 two minutes, marked `stale`.
 
 Press Enter to jump. A local agent is focused in place. An agent on a saved
-machine opens as an attached terminal in the popup, because Herdr cannot switch
-your client to another machine from the CLI.
+machine is focused on that machine, so it is in front when you switch to it,
+and opens over ssh as an attached terminal in the popup, because Herdr cannot
+switch your window to another machine from the CLI.
 
 ## Requirements
 

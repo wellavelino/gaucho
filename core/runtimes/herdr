@@ -40,13 +40,18 @@ case $verb in
     on "$1" agent read "$2" --source recent-unwrapped --lines "$3"
     ;;
   focus)
-    # A saved machine's panes cannot be shown in the local client from the CLI,
-    # so take over the terminal here instead.
     if [[ $1 == local ]]; then
       "$herdr" agent focus "$2" >/dev/null
-    else
-      exec "$herdr" --machine "$1" agent attach "$2"
+      exit
     fi
+    # The CLI cannot switch your window to another machine, and `--machine`
+    # refuses `agent attach`. So focus the agent there, for when you switch to
+    # that machine, and attach to it here over ssh, where attach is local.
+    on "$1" agent focus "$2" >/dev/null 2>&1 || true
+    target=$(ssh_target "$1")
+    [[ -n $target ]] || { echo "No saved machine named $1." >&2; exit 1; }
+    printf -v remote 'PATH="$HOME/.local/bin:$PATH"; exec herdr agent attach %q' "$2"
+    exec ssh -t "$target" "$remote"
     ;;
   prompt)
     on "$1" agent prompt "$2" "$3" >/dev/null
