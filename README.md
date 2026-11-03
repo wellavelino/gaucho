@@ -115,7 +115,6 @@ Add `--runtime NAME` before a command to choose a runtime, such as
 | Command | Does |
 | --- | --- |
 | `tests/run` | Runs the engine tests |
-| `scripts/leak-scan` | Checks files for private data |
 | `app/install.sh` | Installs the desktop mods |
 
 ## Extending
