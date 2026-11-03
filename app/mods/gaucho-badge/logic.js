@@ -118,7 +118,7 @@ export function overlay(fleet, live, changed, now) {
     const i = l.address.indexOf("/");
     const machine = i < 0 ? "local" : l.address.slice(0, i);
     const id = l.address.slice(i + 1);
-    out.push({ id, key: `${machine}/${id}`, machine, kind: l.app || l.program?.name || "agent", title: l.title || "", status: l.status, since_ms: stamp(l.address, l.status) });
+    out.push({ id, key: `${machine}/${id}`, machine, kind: l.program?.key || l.app || "agent", title: l.title || "", status: l.status, since_ms: stamp(l.address, l.status) });
   }
   for (const k of Object.keys(changed)) if (!byAddr.has(k)) delete changed[k];
   return out;

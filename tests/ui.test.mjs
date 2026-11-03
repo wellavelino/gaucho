@@ -115,7 +115,7 @@ test("overlay: live status wins, engine keeps wait times and stuck", () => {
     { address: "d", status: "idle", app: "claude-code" }, // looked at: done turns idle
     { address: "w", status: "working", app: "claude-code" },
     { address: "box/r", status: "working", app: "codex" }, // unblocked since the last engine read
-    { address: "new", status: "blocked", app: "pi" }, // not in the engine fleet yet
+    { address: "new", status: "blocked", app: "pi", program: { key: "pi" } }, // not in the engine fleet yet
   ];
   const changed = {};
   const out = overlay(fleet, live, changed, NOW);
@@ -134,6 +134,17 @@ test("overlay: live status wins, engine keeps wait times and stuck", () => {
   // Once the engine catches up, its since_ms is used again.
   const caught = overlay([agent("new", "blocked", 1)], live, changed, NOW + min(5));
   assert.equal(caught[0].since_ms, NOW - min(1));
+});
+
+test("overlay drops stuck when the status moved, and forgets terminals that left", () => {
+  const changed = {};
+  const fleet = [agent("s", "working", 30, { stuck: "loop", tracked: { quiet_since: NOW - min(20) } })];
+  const [s] = overlay(fleet, [{ address: "s", status: "blocked" }, { address: "x", status: "done" }], changed, NOW);
+  assert.equal(s.stuck, undefined);
+  assert.equal(s.since_ms, NOW);
+  assert.ok(changed.x);
+  overlay(fleet, [{ address: "s", status: "blocked" }], changed, NOW);
+  assert.equal(changed.x, undefined);
 });
 
 test("overlay without live data returns the engine fleet", () => {

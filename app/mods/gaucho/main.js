@@ -9,6 +9,7 @@ import { TABS, GUARD_MS, inbox, terminal, keyAction, move, pressGuard, landIndex
 
 // The badge mod ticks while it is docked; the popup only ticks when that heartbeat is stale.
 const BADGE_STALE_MS = 30000;
+const SHARED_FLEET_MS = 45000;
 
 const engine = () => `${appHome()}/mods/gaucho/core/gaucho`;
 
@@ -56,8 +57,10 @@ export default class Gaucho extends View {
   refresh(cx) {
     cx.spawn(async (cx) => {
       try {
-        // A docked badge reads the engine fleet and shares it; read it here only without one.
-        this.fleet = this.badgeLive() ? (shared("gaucho.fleet")?.fleet ?? []) : await json("fleet");
+        // A docked badge reads the engine fleet every 20s and shares it; read it here when
+        // that copy is old (no badge, a failing read, or one left from the last session).
+        const sh = shared("gaucho.fleet");
+        this.fleet = Date.now() - Number(sh?.at || 0) < SHARED_FLEET_MS ? sh.fleet : await json("fleet");
         this.queue = await json("queue", "list");
         for (const job of await json("jobs")) this.report(job);
         this.error = null;
