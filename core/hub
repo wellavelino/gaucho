@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+# The Gaucho hub: one popup with tabs, a button bar and a preview.
+# fzf draws it. The header is the first two lines of every list, so switching
+# tabs is a reload, and clicks on it map to buttons through $state/hits.
+# Every action runs here, after fzf exits, and then the hub opens again.
+set -euo pipefail
+
+core=$(dirname "$(realpath "${BASH_SOURCE[0]}")")
+gaucho=$core/gaucho
+self=$core/hub
+q=$(printf '%q' "$self")
+
+TABS=(inbox fleet stuck queue land clean)
+LABELS=(Inbox Fleet Stuck Queue Land Clean)
+
+# ANSI styles. The tab bar and buttons use the terminal's own palette.
+reset=$'\e[0m' bold=$'\e[1m' dim=$'\e[2m'
+on_tab=$'\e[1;30;42m' off_tab=$'\e[37m'
+button=$'\e[30;47m' danger=$'\e[30;41m' primary=$'\e[30;42m'
+red=$'\e[31m' green=$'\e[32m' yellow=$'\e[33m' grey=$'\e[90m' cyan=$'\e[36m'
+
+tab_of() { cat "$state/tab" 2>/dev/null || echo inbox; }
+
+# Buttons for each tab: key, label, style. The key is also the keyboard shortcut.
+buttons_for() {
+  case $1 in
+    inbox | fleet | stuck) printf '%s\n' "enter|Jump|primary" "d|Dispatch|button" ;;
+    queue) printf '%s\n' "x|Remove|danger" "d|Dispatch|button" ;;
+    land) printf '%s\n' "o|Open PR|primary" "s|Send back|button" "r|Second opinion|button" "t|Tests|button" "x|Discard|danger" ;;
+    clean) printf '%s\n' "x|Remove|danger" ;;
+  esac
+  printf '%s\n' "R|Refresh|button"
+}
+
+# Print the two header lines and record where each tab and button sits.
+# fzf hides the first five fields of every line, header lines included.
+header() {
+  local tab=$1 counts=$2 i name label line="" plain="" hits="" key style text col
+  for i in "${!TABS[@]}"; do
+    name=${TABS[$i]}
+    label=" $((i + 1)) ${LABELS[$i]}$(jq -r --arg t "$name" '.[$t] // "" | if . == "" or . == 0 then "" else " \(.)" end' <<<"$counts") "
+    col=$((${#plain} + 1))
+    hits+="1 $col $((col + ${#label} - 1)) tab:$name"$'\n'
+    if [[ $name == "$tab" ]]; then line+=$on_tab$label$reset; else line+=$off_tab$label$reset; fi
+    line+=" "
+    plain+="$label "
+  done
+  printf '\t\t\t\t\t%s\n' "$line"
+  line="" plain=""
+  while IFS='|' read -r key label style; do
+    text=" ${key/enter/↵} $label "
+    [[ $key == R ]] && text=" ctrl-r $label "
+    col=$((${#plain} + 1))
+    hits+="2 $col $((col + ${#text} - 1)) key:$key"$'\n'
+    case $style in
+      primary) line+=$primary$text$reset ;;
+      danger) line+=$danger$text$reset ;;
+      *) line+=$button$text$reset ;;
+    esac
+    line+="  "
+    plain+="$text  "
+  done < <(buttons_for "$tab")
+  printf '\t\t\t\t\t%s\n' "$line"
+  printf '%s' "$hits" >"$state/hits"
+}
+
+status_color() {
+  case $1 in
+    BLOCKED) printf '%s' "$red$bold" ;;
+    DONE) printf '%s' "$green$bold" ;;
+    WORKING) printf '%s' "$yellow" ;;
+    *) printf '%s' "$grey" ;;
+  esac
+}
+
+# Rows are: tab, machine, ref, extra, extra2, then what you see. Tab-separated
+# fields can be empty, and `read` merges runs of tabs, so split on \037 instead.
+rows() {
+  local tab=$1 m id status age kind repo issue title ref state_ wid cwd agent ws branch ahead dirty path ready reason
+  case $tab in
+    inbox | fleet | stuck)
+      "$gaucho" "$tab" --tsv 2>/dev/null | tr '\t' '\037' | while IFS=$'\037' read -r m id status age _ kind repo issue title; do
+        printf '%s\t%s\t%s\t\t\t%s%-8s%s %-6s %s%-8s%s %-14.14s %s\n' "$tab" "$m" "$id" \
+          "$(status_color "$status")" "$status" "$reset" "$age" "$cyan" "$m" "$reset" "${issue:-$repo}" "$title"
+      done
+      ;;
+    queue)
+      "$gaucho" queue list --tsv 2>/dev/null | tr '\t' '\037' | while IFS=$'\037' read -r ref state_ m id title; do
+        [[ $state_ == FAILED ]] && state_=$red$bold$state_$reset || state_=$grey$state_$reset
+        printf '%s\t%s\t%s\t\t\t%s %s%-8s%s #%-6s %s\n' "$tab" "$m" "$ref" "$state_" "$cyan" "$m" "$reset" "$id" "$title"
+      done
+      ;;
+    land)
+      "$gaucho" land-list --tsv 2>/dev/null | tr '\t' '\037' | while IFS=$'\037' read -r m cwd agent ws _ branch ahead dirty title; do
+        printf '%s\t%s\t%s\t%s\t%s\t%s%-8s%s %s%-32.32s%s %-4s %s%s%s %s\n' "$tab" "$m" "$cwd" "$agent" "$ws" \
+          "$cyan" "$m" "$reset" "$green" "$branch" "$reset" "$ahead" "$yellow" "$dirty" "$reset" "$title"
+      done
+      ;;
+    clean)
+      "$gaucho" clean-list --tsv 2>/dev/null | tr '\t' '\037' | while IFS=$'\037' read -r m _ path _ _ ready _ branch reason; do
+        [[ $ready == ready ]] && reason=$green$reason$reset || reason=$grey$reason$reset
+        printf '%s\t%s\t%s\t%s\t\t%s%-8s%s %s%-40.40s%s %s\n' "$tab" "$m" "$path" "$ready" \
+          "$cyan" "$m" "$reset" "$green" "$branch" "$reset" "$reason"
+      done
+      ;;
+  esac
+}
+
+empty_note() {
+  case $1 in
+    inbox) echo "Nothing needs you." ;;
+    fleet) echo "No agents are running." ;;
+    stuck) echo "No agents look stuck." ;;
+    queue) echo "The queue is empty. Press d to dispatch." ;;
+    land) echo "Nothing to land." ;;
+    clean) echo "No worktrees found." ;;
+  esac
+}
+
+# The list fzf shows: header, then rows. Called again on every tab switch.
+cmd_list() {
+  local tab=${1:-same} i fleet counts queued out
+  case $tab in
+    same) tab=$(tab_of) ;;
+    next | prev)
+      for i in "${!TABS[@]}"; do [[ ${TABS[$i]} == "$(tab_of)" ]] && break; done
+      [[ $tab == next ]] && i=$(((i + 1) % ${#TABS[@]})) || i=$(((i + ${#TABS[@]} - 1) % ${#TABS[@]}))
+      tab=${TABS[$i]}
+      ;;
+  esac
+  printf '%s\n' "$tab" >"$state/tab"
+  fleet=$("$gaucho" fleet 2>/dev/null) || fleet='[]'
+  queued=$("$gaucho" queue list 2>/dev/null | jq 'map(select(.failed | not)) | length' 2>/dev/null) || queued=0
+  counts=$(jq -c --argjson q "${queued:-0}" '{
+      inbox: map(select(.status == "blocked" or .status == "done")) | length,
+      fleet: length, stuck: map(select(.stuck != null)) | length, queue: $q }' <<<"$fleet")
+  header "$tab" "$counts"
+  out=$(rows "$tab")
+  if [[ -n $out ]]; then printf '%s\n' "$out"; else printf '%s\t\t\t\t\t%s%s%s\n' "$tab" "$grey" "$(empty_note "$tab")" "$reset"; fi
+}
+
+cmd_preview() {
+  local tab=$1 m=$2 ref=$3
+  [[ -n $m ]] || exit 0
+  case $tab in
+    inbox | fleet | stuck) "$gaucho" read "$m" "$ref" 60 ;;
+    queue) "$gaucho" queue list | jq --arg r "$ref" '.[] | select(.ref == $r)' ;;
+    land) "$gaucho" land-info "$m" "$ref" ;;
+    clean) printf '%s\n\n%s\n' "$ref" "$([[ $4 == ready ]] && echo "Merged and clean: safe to remove." || echo "Kept: see the reason in the list.")" ;;
+  esac
+}
+
+# A click on the header: switch tab, or press a button by handing its key to the loop.
+cmd_click() {
+  local line=${FZF_CLICK_HEADER_LINE:-0} col=${FZF_CLICK_HEADER_COLUMN:-0} l a b what
+  while read -r l a b what; do
+    if [[ $l == "$line" ]] && ((col >= a && col <= b)); then
+      case $what in
+        tab:*) echo "reload($q list ${what#tab:})+first" ;;
+        key:R) echo "reload($q list same)" ;;
+        key:*) printf '%s\n' "${what#key:}" >"$state/pressed"; echo "accept" ;;
+      esac
+      return
+    fi
+  done <"$state/hits"
+}
+
+# ---- Actions, run between two fzf sessions ---------------------------------
+
+pause() {
+  printf '\n%s' "${1:-Press any key to go back.}"
+  read -r -n 1 -s -t "${2:-30}" </dev/tty || true
+}
+
+confirm() {
+  if command -v gum >/dev/null; then
+    gum confirm "$1" </dev/tty
+  else
+    local answer
+    read -r -p "$1 [y/N] " answer </dev/tty
+    [[ $answer == [yY]* ]]
+  fi
+}
+
+ask() {
+  if command -v gum >/dev/null; then
+    gum write --header "$1" --placeholder 'ctrl+d to send, esc to cancel' </dev/tty
+  else
+    local answer
+    read -r -p "$1 " answer </dev/tty
+    printf '%s\n' "$answer"
+  fi
+}
+
+run() {
+  clear
+  if "$@"; then pause "Done. Press any key to go back." 5; else pause "That did not work. Press any key to go back."; fi
+}
+
+# Returns 1 when the hub should close.
+act() {
+  local key=$1 tab=$2 m=$3 ref=$4 extra=$5 extra2=$6 input
+  if [[ $key == d ]]; then
+    bash "$core/ui" dispatch
+    return 1
+  fi
+  [[ -n $m ]] || return 0
+  case $tab:$key in
+    inbox:enter | fleet:enter | stuck:enter)
+      "$gaucho" focus "$m" "$ref" || pause "Could not open that agent."
+      return 1
+      ;;
+    queue:x | queue:enter) "$gaucho" queue rm "$ref" ;;
+    land:o | land:enter) run "$gaucho" land-action open-pr "$m" "$ref" "$extra" ;;
+    land:t) run "$gaucho" land-action run-tests "$m" "$ref" "$extra" ;;
+    land:r) run "$gaucho" review "$m" "$ref" "$extra2" ;;
+    land:s)
+      clear
+      input=$(ask "What should the agent change?") || return 0
+      [[ -n $input ]] && run "$gaucho" land-action send-back "$m" "$ref" "$extra" "$input"
+      ;;
+    land:x)
+      clear
+      confirm "Discard this branch and its worktree?" && run "$gaucho" land-action discard "$m" "$ref" "$extra"
+      ;;
+    clean:x | clean:enter)
+      if [[ $extra != ready ]]; then clear; pause "Only merged, clean worktrees can be removed." 5; return 0; fi
+      clear
+      confirm "Remove $ref and its branch?" && run "$gaucho" clean "$m" "$ref"
+      ;;
+  esac
+  return 0
+}
+
+cmd_open() {
+  local out key row tab m ref extra extra2
+  export GAUCHO_HUB_STATE
+  GAUCHO_HUB_STATE=$(mktemp -d)
+  state=$GAUCHO_HUB_STATE
+  trap 'rm -rf "$state"' EXIT
+  echo inbox >"$state/tab"
+  local binds=(
+    --bind "tab:reload($q list next)+first" --bind "btab:reload($q list prev)+first"
+    --bind "ctrl-r:reload($q list same)" --bind "R:reload($q list same)"
+  )
+  local i
+  for i in 1 2 3 4 5 6; do binds+=(--bind "$i:reload($q list ${TABS[$((i - 1))]})+first"); done
+  # fzf before 0.48 has no clickable header: there the buttons are keys only.
+  if echo x | fzf --bind 'click-header:ignore' --filter x >/dev/null 2>&1; then
+    binds+=(--bind "click-header:transform($q click)")
+  fi
+  while true; do
+    rm -f "$state/pressed"
+    out=$("$self" list same | fzf --ansi --layout=reverse --header-lines=2 --disabled --no-sort \
+      --delimiter=$'\t' --with-nth=6.. --prompt='  ' --info=hidden --border=rounded --border-label=' Gaucho ' \
+      --preview="$q preview {1} {2} {3} {4}" --preview-window='down,55%,wrap,border-top' \
+      --expect=enter,d,o,s,r,t,x "${binds[@]}") || return 0
+    key=$(head -n 1 <<<"$out")
+    row=$(sed -n 2p <<<"$out")
+    [[ -f $state/pressed ]] && key=$(cat "$state/pressed")
+    IFS=$'\037' read -r tab m ref extra extra2 _ <<<"$(tr '\t' '\037' <<<"$row")" || true
+    tab=${tab:-$(tab_of)}
+    act "$key" "$tab" "${m:-}" "${ref:-}" "${extra:-}" "${extra2:-}" || return 0
+  done
+}
+
+state=${GAUCHO_HUB_STATE:-}
+case ${1:-open} in
+  open) cmd_open ;;
+  list) cmd_list "${2:-same}" ;;
+  preview) cmd_preview "${2:-}" "${3:-}" "${4:-}" "${5:-}" ;;
+  click) cmd_click ;;
+  *) exit 64 ;;
+esac

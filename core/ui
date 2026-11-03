@@ -164,43 +164,8 @@ screen_review() {
   pause "" 3
 }
 
-# ---- Hub: every screen in one popup ------------------------------------------
-
-# One row per screen: name, key, label, and a live count where it is cheap.
-# Land and Clean probe every worktree, so they show no count.
-hub_rows() {
-  local fleet queued
-  fleet=$("$gaucho" fleet 2>/dev/null) || fleet='[]'
-  queued=$("$gaucho" queue list 2>/dev/null | jq 'map(select(.failed | not)) | length' 2>/dev/null) || queued=0
-  jq -r --argjson queued "${queued:-0}" '
-    (map(select(.status == "blocked")) | length) as $blocked
-    | (map(select(.status == "done")) | length) as $done
-    | (map(select(.stuck != null)) | length) as $stuck
-    | def count($n; $word): if $n > 0 then "\($n) \($word)" else "" end;
-    [ ["inbox", "1", "Inbox", ([count($blocked; "blocked"), count($done; "done")] | map(select(. != "")) | join(" · ") | if . == "" then "nobody waiting" else . end)],
-      ["fleet", "2", "Fleet", "\(length) agents"],
-      ["stuck", "3", "Stuck", (count($stuck; "stuck") | if . == "" then "none" else . end)],
-      ["dispatch", "4", "Dispatch", "send an issue to an agent"],
-      ["queue", "5", "Queue", (count($queued; "queued") | if . == "" then "empty" else . end)],
-      ["land", "6", "Land", "review finished work"],
-      ["review", "7", "Second opinion", "a fresh agent reviews a branch"],
-      ["clean", "8", "Clean", "remove merged worktrees"] ]
-    | .[] | @tsv' <<<"$fleet"
-}
-
-screen_hub() {
-  local pick name binds=() i
-  for i in 1 2 3 4 5 6 7 8; do binds+=(--bind "$i:pos($i)+accept"); done
-  while true; do
-    jumped=
-    pick=$(hub_rows | fzf --delimiter=$'\t' --with-nth=2.. --tabstop=2 --no-sort --cycle \
-      --header='enter or 1-8: open · esc: close' "${binds[@]}") || return 0
-    name=$(cut -f1 <<<"$pick")
-    "screen_$name"
-    # A jump shows the agent and a dispatch reports by notification: both are done here.
-    [[ -z $jumped && $name != dispatch ]] || return 0
-  done
-}
+# The hub is its own program: tabs, buttons and a preview in one popup.
+screen_hub() { exec "$core/hub" open; }
 
 screen=${1:?screen}
 shift

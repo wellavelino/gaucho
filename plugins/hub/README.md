@@ -1,12 +1,27 @@
 # Gaucho
 
-Every Gaucho screen in one popup, with live counts: Inbox, Fleet, Stuck,
-Dispatch, Queue, Land, Second opinion and Clean. Press Enter or 1–8 to open a
-screen. Closing a screen brings you back here; jumping to an agent or
-dispatching an issue closes the popup. Esc closes it.
+Every Gaucho screen in one popup: a tab bar, a row of buttons for the selected
+item, and a preview of it.
 
-The hub runs the same screens as the other plugins, so you can install it
-alone or next to them.
+| Tab | Lists | Buttons |
+| --- | --- | --- |
+| Inbox | blocked and finished agents | Jump, Dispatch |
+| Fleet | every agent | Jump, Dispatch |
+| Stuck | agents that stopped making progress | Jump, Dispatch |
+| Queue | issues waiting to start | Remove, Dispatch |
+| Land | finished branches | Open PR, Send back, Second opinion, Tests, Discard |
+| Clean | worktrees, with why each is kept or can go | Remove |
+
+Click a tab or a button, or use the keys: `1`–`6` or `tab` for tabs, and the
+letter on each button (`↵` for the first). `ctrl-r` refreshes and `esc`
+closes. After an action you come back to the hub; jumping to an agent or
+dispatching closes it. The preview shows the agent's screen, the branch's
+commits and checks, or the queued issue.
+
+Clicking needs fzf 0.48 or newer. With an older fzf the buttons are keys only.
+
+The hub runs the same engine as the other plugins, so you can install it alone
+or next to them.
 
 ## Key
 
