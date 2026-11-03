@@ -1,6 +1,6 @@
 id = "gaucho.second-opinion"
 name = "Second Opinion"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.9.1"
 description = "Start a fresh agent to review a finished branch"
 platforms = ["linux", "macos"]

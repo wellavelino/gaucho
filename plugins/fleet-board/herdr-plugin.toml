@@ -1,6 +1,6 @@
 id = "gaucho.fleet-board"
 name = "Fleet Board"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.9.1"
 description = "Every agent on every machine in one view"
 platforms = ["linux", "macos"]

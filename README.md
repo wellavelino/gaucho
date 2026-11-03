@@ -11,6 +11,7 @@ ones need you and gets you there quickly.
 
 | Plugin | What it does |
 | --- | --- |
+| [Gaucho](plugins/hub) | Every screen of the plugins below in one popup, with live counts. |
 | [Agent Inbox](plugins/agent-inbox) | Shows which agents on any machine need you, with a tab bar badge. |
 | [Issue Dispatch](plugins/issue-dispatch) | Sends issues from any tracker to an agent on any machine, now or from a queue. |
 | [Fleet Board](plugins/fleet-board) | Shows every agent, its state, and how long it has been there. |
@@ -54,11 +55,19 @@ Review a plugin before installing it: Herdr plugins run as your user and are
 not sandboxed.
 
 ```sh
-herdr plugin install wellavelino/gaucho/plugins/agent-inbox
-herdr plugin install wellavelino/gaucho/plugins/issue-dispatch
+herdr plugin install wellavelino/gaucho/plugins/hub
 ```
 
-Install any others the same way. Each plugin's README has its key binding. Add the
+That one popup opens every screen. To give screens their own keys, install
+their plugins the same way, or all of them at once:
+
+```sh
+for p in hub agent-inbox issue-dispatch fleet-board landing second-opinion stuck-detector cleanup; do
+  herdr plugin install wellavelino/gaucho/plugins/$p --yes
+done
+```
+
+Each plugin's README has its key binding. Add the
 [tab bar entry](plugins/agent-inbox#tab-bar) too, because it drives the background
 work.
 
@@ -83,6 +92,7 @@ plugin's README has the binding format. The prefix is your Herdr prefix key.
 
 | Key | Action | Opens |
 | --- | --- | --- |
+| `prefix+g` | `gaucho.hub.open` | Gaucho, every screen |
 | `prefix+i` | `gaucho.agent-inbox.open` | Agent Inbox |
 | `prefix+shift+i` | `gaucho.issue-dispatch.open` | Issue Dispatch |
 | `prefix+shift+q` | `gaucho.issue-dispatch.queue` | Dispatch queue |

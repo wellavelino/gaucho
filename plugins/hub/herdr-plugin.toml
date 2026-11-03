@@ -1,0 +1,32 @@
+id = "gaucho.hub"
+name = "Gaucho"
+version = "0.4.0"
+min_herdr_version = "0.9.1"
+description = "Every Gaucho screen in one popup: inbox, fleet, stuck, dispatch, queue, land, review, clean"
+platforms = ["linux", "macos"]
+
+[[actions]]
+id = "open"
+title = "Open Gaucho"
+contexts = ["workspace"]
+command = ["sh", "../../core/open"]
+
+[[panes]]
+id = "picker"
+title = "Gaucho"
+platforms = ["linux", "macos"]
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["bash", "../../core/ui", "hub"]
+
+# Dispatch from the hub hands a waiting brief to this action, like Issue Dispatch does.
+[[actions]]
+id = "deliver"
+title = "Send waiting briefs"
+contexts = ["workspace"]
+command = ["bash", "../../core/gaucho", "deliver"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "../../core/gaucho", "tick"]
