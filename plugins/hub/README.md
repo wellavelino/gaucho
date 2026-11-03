@@ -12,7 +12,7 @@ alone or next to them.
 
 ```toml
 [[keys.command]]
-key = "prefix+g"
+key = "prefix+a"
 type = "plugin_action"
 command = "gaucho.hub.open"
 description = "gaucho"

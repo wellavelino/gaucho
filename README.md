@@ -92,7 +92,7 @@ plugin's README has the binding format. The prefix is your Herdr prefix key.
 
 | Key | Action | Opens |
 | --- | --- | --- |
-| `prefix+g` | `gaucho.hub.open` | Gaucho, every screen |
+| `prefix+a` | `gaucho.hub.open` | Gaucho, every screen |
 | `prefix+i` | `gaucho.agent-inbox.open` | Agent Inbox |
 | `prefix+shift+i` | `gaucho.issue-dispatch.open` | Issue Dispatch |
 | `prefix+shift+q` | `gaucho.issue-dispatch.queue` | Dispatch queue |
