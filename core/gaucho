@@ -124,6 +124,12 @@ machines() {
 
 # Everything shown on a screen is stripped of control characters, because
 # titles and paths from agents can carry terminal escape sequences.
+parallel=${GAUCHO_PARALLEL:-8}
+
+# Call after starting the i-th background probe. Waiting in batches keeps sshd
+# from dropping connections that arrive all at once, and works on bash 3.2.
+throttle() { (($1 % parallel)) || wait; }
+
 sanitize='def clean: tostring | explode | map(if . < 32 or (. >= 127 and . < 160) then 32 else . end) | implode;'
 
 # ---- Fleet: every agent on every machine ------------------------------------
@@ -600,17 +606,32 @@ pr_status() {
   bounded 10 "$forge" pr-status "$1" "$2" 2>/dev/null || echo null
 }
 
+# Print the agent's worktree as a land row, or nothing if it has no work to land.
+land_row() {
+  local row=$1 info
+  info=$(land_info "$(jq -r .machine <<<"$row")" "$(jq -r .cwd <<<"$row")") || return 0
+  jq -c --argjson a "$row" '
+    select(.branch != "" and .branch != .base and (.ahead > 0 or .dirty > 0))
+    | . + {agent: $a.id, kind: $a.kind, status: $a.status, workspace: $a.workspace}' <<<"$info"
+}
+
 cmd_land_list() {
-  local fleet row seen=" " key info rows='[]'
+  local fleet row seen=" " key dir i=0 rows
+  use_runtime
   fleet=$(fleet_json)
+  dir=$(mktemp -d)
+  # Each worktree is probed at once, over ssh for saved machines. Numbered files keep the order.
   while IFS= read -r row; do
     key=$(jq -r '"\(.machine)|\(.cwd)"' <<<"$row")
     [[ $seen == *" $key "* ]] && continue
     seen+="$key "
-    info=$(land_info "$(jq -r .machine <<<"$row")" "$(jq -r .cwd <<<"$row")") || continue
-    jq -e '.branch != "" and .branch != .base and (.ahead > 0 or .dirty > 0)' <<<"$info" >/dev/null || continue
-    rows=$(jq --argjson i "$info" --argjson a "$row" '. + [$i + {agent: $a.id, kind: $a.kind, status: $a.status, workspace: $a.workspace}]' <<<"$rows")
+    i=$((i + 1))
+    land_row "$row" >"$dir/$(printf %05d "$i")" &
+    throttle "$i"
   done < <(jq -c '.[] | select(.status != "working" and (.stale | not))' <<<"$fleet")
+  wait
+  rows=$(shopt -s nullglob; cat /dev/null "$dir"/* | jq -s .)
+  rm -rf "$dir"
   if [[ ${1:-} == --tsv ]]; then
     jq -r "$sanitize"'.[] | [.machine, .cwd, .agent, (.workspace // ""), .machine, .branch, "+\(.ahead)", (if .dirty > 0 then "\(.dirty) uncommitted" else "" end), (.run.title // .stat)] | map(clean) | @tsv' <<<"$rows"
   else
@@ -709,12 +730,13 @@ printf "url\t%s\n" "$(git remote get-url origin 2>/dev/null)"
 git worktree list --porcelain | while read -r key value; do
   case $key in
     worktree) path=$value ;;
+    HEAD) head=$value ;;
     branch)
       branch=${value#refs/heads/}
       [ "$path" = "$(pwd)" ] && continue
       dirty=$(git -C "$path" status --porcelain 2>/dev/null | wc -l | tr -d " ")
       if printf "%s\n" "$merged" | grep -qxF "$branch"; then m=1; else m=0; fi
-      printf "wt\t%s\t%s\t%s\t%s\n" "$path" "$branch" "$dirty" "$m"
+      printf "wt\t%s\t%s\t%s\t%s\t%s\n" "$path" "$branch" "$dirty" "$m" "$head"
       ;;
   esac
 done
@@ -730,41 +752,102 @@ known_repos() {
   } | sort -u
 }
 
+# Merged pull requests as "branch<TAB>head commit" lines, from one forge call.
+# Fails if no forge handles the remote or the forge has no merged-branches verb.
+forge_merged() {
+  local forge
+  forge=$(forge_for "$1") || return 1
+  bounded 20 "$forge" merged-branches "$1" 2>/dev/null
+}
+
+# Exits 0 if branch $1 adds nothing to commit $2: merging it would leave $2's
+# tree as it is. That covers a PR rebased or stacked on a squash before merging.
+# Git before 2.38 has no merge-tree --write-tree, so it compares patches instead.
+# A missing commit, a conflict or any git error means no.
+contained_probe='
+[ -n "$2" ] && git cat-file -e "$2^{commit}" 2>/dev/null || exit 1
+if tree=$(git merge-tree --write-tree "$2" "$1" 2>/dev/null); then
+  [ "$tree" = "$(git rev-parse "$2^{tree}")" ]
+  exit
+fi
+git merge-tree --write-tree "$2" "$2" >/dev/null 2>&1 && exit 1
+out=$(git cherry "$2" "$1") || exit 1
+! printf "%s\n" "$out" | grep -q "^+"
+'
+
+# Print one JSON row per worktree of a repository.
+clean_repo() {
+  local fleet=$1 machine=$2 repo=$3 output url= kind wt branch dirty merged head state_ reason ok
+  local listed=0 merged_prs= pr_head
+  output=$(rt exec "$machine" "$repo" sh -c "$clean_probe" 2>/dev/null) || return 0
+  while IFS=$'\t' read -r kind wt branch dirty merged head; do
+    if [[ $kind == url ]]; then url=$wt; continue; fi
+    [[ $kind == wt ]] || continue
+    ok=false
+    state_=keep
+    # Squash merges leave no ancestry, so ask the forge. A PR only counts if it
+    # merged this commit or already holds its changes: a reused branch name with new work stays.
+    if [[ $merged != 1 && -n $url ]]; then
+      if ((listed == 0)); then
+        if merged_prs=$(forge_merged "$url"); then listed=1; else listed=2; fi
+      fi
+      if ((listed == 1)); then
+        if grep -qxF "$branch"$'\t'"$head" <<<"$merged_prs"; then
+          merged=2
+        else
+          pr_head=$(awk -F'\t' -v b="$branch" '$1 == b { print $2; exit }' <<<"$merged_prs")
+          if [[ -n $pr_head ]] && rt exec "$machine" "$repo" sh -c "$contained_probe" sh "$branch" "$pr_head" >/dev/null 2>&1; then
+            merged=2
+          fi
+        fi
+      elif [[ $(pr_status "$url" "$branch" | jq -r '.state? // ""') == MERGED ]]; then
+        merged=2
+      fi
+    fi
+    if jq -e --arg m "$machine" --arg p "$wt" 'any(.[]; .machine == $m and (.cwd == $p or (.cwd | startswith($p + "/"))))' <<<"$fleet" >/dev/null; then
+      reason="an agent is here"
+    elif [[ $dirty != 0 ]]; then
+      reason="$dirty uncommitted files"
+    elif [[ $merged == 0 ]]; then
+      reason="not merged"
+    else
+      reason=merged
+      state_=clean
+      ok=true
+    fi
+    jq -cn --arg machine "$machine" --arg repo "$repo" --arg path "$wt" --arg branch "$branch" \
+      --arg state "$state_" --arg reason "$reason" --argjson ok "$ok" --arg squashed "$merged" \
+      '{machine: $machine, repo: $repo, path: $path, branch: $branch, state: $state, reason: $reason, removable: $ok, squashed: ($squashed == "2")}'
+  done <<<"$output"
+}
+
+# Every worktree of every known repository. Given M PATH, only that path's repository.
 clean_rows() {
-  local fleet machine path repo output seen=" " url kind wt branch dirty merged state_ reason ok pr rows='[]'
+  local fleet dir machine path repo i=0
+  use_runtime
   fleet=$(fleet_json)
+  dir=$(mktemp -d)
+  if (($# == 2)); then
+    printf '%s\t%s\n' "$1" "$2" >"$dir/paths"
+  else
+    known_repos "$fleet" >"$dir/paths"
+  fi
+  # Many paths share a repository, so find each one's first, all at once.
   while IFS=$'\t' read -r machine path; do
-    repo=$(repo_of "$machine" "$path" 2>/dev/null) || continue
-    [[ $seen == *" $machine|$repo "* ]] && continue
-    seen+="$machine|$repo "
-    output=$(rt exec "$machine" "$repo" sh -c "$clean_probe" 2>/dev/null) || continue
-    url=
-    while IFS=$'\t' read -r kind wt branch dirty merged; do
-      if [[ $kind == url ]]; then url=$wt; continue; fi
-      [[ $kind == wt ]] || continue
-      ok=false
-      state_=keep
-      if [[ $merged != 1 && -n $url ]]; then
-        pr=$(pr_status "$url" "$branch")
-        [[ $(jq -r '.state // ""' <<<"${pr:-null}") == MERGED ]] && merged=2
-      fi
-      if jq -e --arg m "$machine" --arg p "$wt" 'any(.[]; .machine == $m and (.cwd == $p or (.cwd | startswith($p + "/"))))' <<<"$fleet" >/dev/null; then
-        reason="an agent is here"
-      elif [[ $dirty != 0 ]]; then
-        reason="$dirty uncommitted files"
-      elif [[ $merged == 0 ]]; then
-        reason="not merged"
-      else
-        reason=merged
-        state_=clean
-        ok=true
-      fi
-      rows=$(jq --arg machine "$machine" --arg repo "$repo" --arg path "$wt" --arg branch "$branch" \
-        --arg state "$state_" --arg reason "$reason" --argjson ok "$ok" --arg squashed "$merged" \
-        '. + [{machine: $machine, repo: $repo, path: $path, branch: $branch, state: $state, reason: $reason, removable: $ok, squashed: ($squashed == "2")}]' <<<"$rows")
-    done <<<"$output"
-  done < <(known_repos "$fleet")
-  printf '%s\n' "$rows"
+    i=$((i + 1))
+    { repo=$(repo_of "$machine" "$path" 2>/dev/null) && printf '%s\t%s\n' "$machine" "$repo"; } >"$dir/repo.$i" &
+    throttle "$i"
+  done <"$dir/paths"
+  wait
+  i=0
+  while IFS=$'\t' read -r machine repo; do
+    i=$((i + 1))
+    clean_repo "$fleet" "$machine" "$repo" >"$dir/rows.$i" &
+    throttle "$i"
+  done < <(shopt -s nullglob; cat /dev/null "$dir"/repo.* | sort -u)
+  wait
+  (shopt -s nullglob; cat /dev/null "$dir"/rows.*) | jq -s 'sort_by(.machine, .repo, .path)'
+  rm -rf "$dir"
 }
 
 cmd_clean_list() {
@@ -778,7 +861,7 @@ cmd_clean_list() {
 # Check again right before removing: things change while a list is on screen.
 cmd_clean() {
   local machine=$1 path=$2 row repo branch
-  row=$(clean_rows | jq -c --arg m "$machine" --arg p "$path" 'map(select(.machine == $m and .path == $p))[0] // empty')
+  row=$(clean_rows "$machine" "$path" | jq -c --arg m "$machine" --arg p "$path" 'map(select(.machine == $m and .path == $p))[0] // empty')
   [[ -n $row ]] || fail "$path is no longer a worktree on $machine."
   [[ $(jq -r .removable <<<"$row") == true ]] || fail "$path is not safe to remove: $(jq -r .reason <<<"$row")."
   repo=$(jq -r .repo <<<"$row")

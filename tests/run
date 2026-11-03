@@ -192,6 +192,42 @@ same "offers merged worktrees" "$(jq -r --arg p "$one" '.[] | select(.path == $p
 same "keeps unmerged worktrees" "$(jq -r --arg p "$two" '.[] | select(.path == $p) | .reason' <<<"$rows")" "not merged"
 same "keeps dirty worktrees" "$(jq -r --arg p "$three" '.[] | select(.path == $p) | .reason' <<<"$rows")" "1 uncommitted files"
 has "refuses unmerged work" "$(g clean local "$two" 2>&1)" "not safe"
+mkdir -p "$GAUCHO_CONFIG_DIR/forges"
+cat >"$GAUCHO_CONFIG_DIR/forges/testforge" <<'F'
+#!/usr/bin/env bash
+case $1 in
+  detect) exit 0 ;;
+  merged-branches) [[ -f $FAKE/merged ]] || exit 64; cat "$FAKE/merged" ;;
+  pr-status) [[ $3 == "$(cat "$FAKE/squashed" 2>/dev/null)" ]] && echo '{"state":"MERGED"}' || echo null ;;
+esac
+F
+chmod +x "$GAUCHO_CONFIG_DIR/forges/testforge"
+branch_two=$(git -C "$two" branch --show-current)
+printf '%s\t%s\n' "$branch_two" "$(git -C "$two" rev-parse HEAD)" >"$FAKE/merged"
+row_two() { g clean-list | jq -c --arg p "$two" '.[] | select(.path == $p) | {reason, squashed}'; }
+same "sees a squash merge in one forge call" "$(row_two)" '{"reason":"merged","squashed":true}'
+printf '%s\t%s\n' "$branch_two" 0000000000000000000000000000000000000000 >"$FAKE/merged"
+same "keeps new work on a merged branch name" "$(row_two)" '{"reason":"not merged","squashed":false}'
+echo two >"$two/two.txt"
+git -C "$two" add two.txt
+git -C "$two" commit -q -m "add two"
+rebased() {
+  git -C "$work/repo" switch -q -c rebased main
+  git -C "$work/repo" commit -q --allow-empty -m "landed meanwhile"
+  git -C "$work/repo" cherry-pick "$(git -C "$two" rev-parse HEAD)" >/dev/null
+  [[ -z ${1:-} ]] || { echo "$1" >"$work/repo/two.txt"; git -C "$work/repo" commit -q -a --amend --no-edit; }
+  git -C "$work/repo" rev-parse HEAD
+  git -C "$work/repo" switch -q main
+  git -C "$work/repo" branch -q -D rebased
+}
+printf '%s\t%s\n' "$branch_two" "$(rebased)" >"$FAKE/merged"
+same "sees a PR that was rebased, then merged" "$(row_two)" '{"reason":"merged","squashed":true}'
+printf '%s\t%s\n' "$branch_two" "$(rebased changed)" >"$FAKE/merged"
+same "keeps work the merged PR changed" "$(row_two)" '{"reason":"not merged","squashed":false}'
+rm -f "$FAKE/merged"
+echo "$branch_two" >"$FAKE/squashed"
+same "falls back to pr-status per branch" "$(row_two)" '{"reason":"merged","squashed":true}'
+rm -rf "$GAUCHO_CONFIG_DIR/forges" "$FAKE/squashed"
 agents local "$(agent a1 idle "$one/sub")"
 has "refuses where an agent sits" "$(g clean local "$one" 2>&1)" "an agent is here"
 rm -f "$FAKE"/agents-*
