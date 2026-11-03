@@ -4,8 +4,8 @@
 // Ordering, labels and the key map live in ./logic.js (tested by node, tests/ui.test.mjs).
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { exec, appHome, closeOverlay, focused, notify, props, run, theme, shared } from "herdr";
-import { TABS, GUARD_MS, inbox, terminal, keyAction, move, pressGuard, landIndex } from "./logic.js";
+import { agents, exec, appHome, closeOverlay, focused, notify, props, run, theme, shared } from "herdr";
+import { TABS, GUARD_MS, inbox, terminal, keyAction, move, pressGuard, landIndex, overlay } from "./logic.js";
 
 // The badge mod ticks while it is docked; the popup only ticks when that heartbeat is stale.
 const BADGE_STALE_MS = 30000;
@@ -27,6 +27,7 @@ export default class Gaucho extends View {
     this.tab = "Inbox";
     this.sel = 0; // Selected row in the current tab; the top Inbox row on open.
     this.fleet = [];
+    this.changed = {};
     this.queue = [];
     this.land = null;
     this.landWanted = null; // The agent `l` asked for, selected once the Land list arrives.
@@ -47,7 +48,7 @@ export default class Gaucho extends View {
     cx.timer.every(5000, (cx) => this.refresh(cx));
     // Delivery, stuck detection and the queue. Nothing here runs while the app is closed.
     cx.timer.every(20000, (cx) => {
-      if (Date.now() - Number(shared("gaucho.badge") || 0) < BADGE_STALE_MS) return;
+      if (this.badgeLive()) return;
       cx.spawn(async () => { await gaucho("job", "tick").catch(() => {}); });
     });
   }
@@ -55,7 +56,8 @@ export default class Gaucho extends View {
   refresh(cx) {
     cx.spawn(async (cx) => {
       try {
-        this.fleet = await json("fleet");
+        // A docked badge reads the engine fleet and shares it; read it here only without one.
+        this.fleet = this.badgeLive() ? (shared("gaucho.fleet")?.fleet ?? []) : await json("fleet");
         this.queue = await json("queue", "list");
         for (const job of await json("jobs")) this.report(job);
         this.error = null;
@@ -153,7 +155,10 @@ export default class Gaucho extends View {
 
   // ---- What each tab lists, and what ↵ does on a row --------------------------------
 
-  inboxRows() { return inbox(this.fleet, Date.now()); }
+  badgeLive() { return Date.now() - Number(shared("gaucho.badge") || 0) < BADGE_STALE_MS; }
+
+  // Live status from agents() over the engine fleet; see overlay in logic.js.
+  inboxRows() { return inbox(overlay(this.fleet, agents(), this.changed, Date.now()), Date.now()); }
   stuckRows() { return this.inboxRows().filter((r) => r.group === "stuck"); }
 
   // Dispatch rows depend on how deep the breadcrumb is.

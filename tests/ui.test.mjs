@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  duration, terminal, inbox, counts, badgeText, nextTarget, keyAction, move, pressGuard, landIndex, TABS,
+  duration, terminal, inbox, counts, badgeText, nextTarget, keyAction, move, pressGuard, landIndex, TABS, overlay,
 } from "../app/mods/gaucho/logic.js";
 
 const NOW = 10_000_000;
@@ -100,6 +100,45 @@ test("landIndex finds the card for an agent", () => {
   const land = [{ machine: "local", agent: "a" }, { machine: "box", agent: "b" }];
   assert.equal(landIndex(land, { machine: "box", id: "b" }), 1);
   assert.equal(landIndex(land, { machine: "local", id: "b" }), -1);
+});
+
+test("overlay: live status wins, engine keeps wait times and stuck", () => {
+  const fleet = [
+    agent("b", "blocked", 10),
+    agent("d", "done", 4),
+    agent("w", "working", 30, { stuck: "loop", tracked: { quiet_since: NOW - min(20) } }),
+    agent("r", "blocked", 2, { machine: "box" }),
+    agent("gone", "done", 1),
+  ];
+  const live = [
+    { address: "b", status: "blocked", app: "claude-code" },
+    { address: "d", status: "idle", app: "claude-code" }, // looked at: done turns idle
+    { address: "w", status: "working", app: "claude-code" },
+    { address: "box/r", status: "working", app: "codex" }, // unblocked since the last engine read
+    { address: "new", status: "blocked", app: "pi" }, // not in the engine fleet yet
+  ];
+  const changed = {};
+  const out = overlay(fleet, live, changed, NOW);
+  const by = Object.fromEntries(out.map((a) => [terminal(a), a]));
+  assert.equal(by.b.since_ms, NOW - min(10));
+  assert.equal(by.d.status, "idle");
+  assert.equal(by.w.stuck, "loop");
+  assert.equal(by["box/r"].status, "working");
+  assert.equal(by["box/r"].stuck, undefined);
+  assert.deepEqual([by.new.machine, by.new.id, by.new.kind, by.new.since_ms], ["local", "new", "pi", NOW]);
+  assert.equal(by.gone.status, "done"); // absent from agents(): engine data stays
+  assert.deepEqual(inbox(out, NOW).map((r) => r.id), ["b", "new", "gone", "w"]);
+  // A changed status keeps its first-seen stamp on later renders.
+  const later = overlay(fleet, live, changed, NOW + min(5));
+  assert.equal(later.find((a) => a.id === "new").since_ms, NOW);
+  // Once the engine catches up, its since_ms is used again.
+  const caught = overlay([agent("new", "blocked", 1)], live, changed, NOW + min(5));
+  assert.equal(caught[0].since_ms, NOW - min(1));
+});
+
+test("overlay without live data returns the engine fleet", () => {
+  const fleet = [agent("b", "blocked", 1)];
+  assert.deepEqual(overlay(fleet, null, {}, NOW), fleet);
 });
 
 test("the badge ships the same logic.js as the popup", async () => {

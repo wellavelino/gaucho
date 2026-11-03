@@ -59,6 +59,9 @@ Run `app/install.sh` again after updating Gaucho.
 
 - Delivery, stuck detection and the queue run while the app is open. The badge
   runs them; without the badge, the open popup does.
+- Status (blocked, done, idle) is live from Herdr's `agents()`. Wait times, stuck
+  and runs come from the engine, which the badge reads every 20s and shares with the
+  popup. An agent that changed status since that read is timed from when the mod saw it.
 - The sidebar keeps Herdr's own sort (status first). Gaucho does not reorder it.
 - The popup's Inbox also lists stuck agents and sorts by wait. The terminal Agent
   Inbox plugin lists only blocked and done agents.

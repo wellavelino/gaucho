@@ -91,3 +91,35 @@ export function pressGuard(armed, id, now) {
 export function landIndex(land, a) {
   return (land || []).findIndex((x) => x.agent === a.id && (x.machine || "local") === (a.machine || "local"));
 }
+
+// Live status from Herdr's agents() over the last engine fleet. Live wins: a
+// done agent you looked at turns idle at once. The engine still owns wait times,
+// stuck and runs, so an agent whose status moved since that read is timed from
+// when this first saw the change (stamped in `changed`, which the caller keeps).
+// Engine agents absent from agents() keep the engine data.
+export function overlay(fleet, live, changed, now) {
+  if (!live) return fleet || [];
+  const byAddr = new Map(live.map((l) => [l.address, l]));
+  const stamp = (addr, status) => {
+    if (changed[addr]?.s !== status) changed[addr] = { s: status, at: now };
+    return changed[addr].at;
+  };
+  const seen = new Set();
+  const out = (fleet || []).map((a) => {
+    const addr = terminal(a);
+    const l = byAddr.get(addr);
+    if (!l) return a;
+    seen.add(addr);
+    if (l.status === a.status) { delete changed[addr]; return a; }
+    return { ...a, status: l.status, since_ms: stamp(addr, l.status), stuck: undefined };
+  });
+  for (const l of live) {
+    if (seen.has(l.address)) continue;
+    const i = l.address.indexOf("/");
+    const machine = i < 0 ? "local" : l.address.slice(0, i);
+    const id = l.address.slice(i + 1);
+    out.push({ id, key: `${machine}/${id}`, machine, kind: l.app || l.program?.name || "agent", title: l.title || "", status: l.status, since_ms: stamp(l.address, l.status) });
+  }
+  for (const k of Object.keys(changed)) if (!byAddr.has(k)) delete changed[k];
+  return out;
+}
