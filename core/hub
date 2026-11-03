@@ -14,7 +14,7 @@ TABS=(inbox fleet stuck queue land clean)
 LABELS=(Inbox Fleet Stuck Queue Land Clean)
 
 # ANSI styles. The tab bar and buttons use the terminal's own palette.
-reset=$'\e[0m' bold=$'\e[1m' dim=$'\e[2m'
+reset=$'\e[0m' bold=$'\e[1m'
 on_tab=$'\e[1;30;42m' off_tab=$'\e[37m'
 button=$'\e[30;47m' danger=$'\e[30;41m' primary=$'\e[30;42m'
 red=$'\e[31m' green=$'\e[32m' yellow=$'\e[33m' grey=$'\e[90m' cyan=$'\e[36m'
@@ -76,10 +76,10 @@ status_color() {
 # Rows are: tab, machine, ref, extra, extra2, then what you see. Tab-separated
 # fields can be empty, and `read` merges runs of tabs, so split on \037 instead.
 rows() {
-  local tab=$1 m id status age kind repo issue title ref state_ wid cwd agent ws branch ahead dirty path ready reason
+  local tab=$1 m id status age repo issue title ref state_ cwd agent ws branch ahead dirty path ready reason
   case $tab in
     inbox | fleet | stuck)
-      "$gaucho" "$tab" --tsv 2>/dev/null | tr '\t' '\037' | while IFS=$'\037' read -r m id status age _ kind repo issue title; do
+      "$gaucho" "$tab" --tsv 2>/dev/null | tr '\t' '\037' | while IFS=$'\037' read -r m id status age _ _ repo issue title; do
         printf '%s\t%s\t%s\t\t\t%s%-8s%s %-6s %s%-8s%s %-14.14s %s\n' "$tab" "$m" "$id" \
           "$(status_color "$status")" "$status" "$reset" "$age" "$cyan" "$m" "$reset" "${issue:-$repo}" "$title"
       done

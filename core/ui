@@ -38,7 +38,6 @@ agent_picker() {
     --preview="$q read {1} {2} 60" --preview-window='down,60%,wrap,follow' \
     --bind="ctrl-r:reload($q $list --tsv)") || return 0
   guarded "$gaucho" focus "$(cut -f1 <<<"$pick")" "$(cut -f2 <<<"$pick")"
-  jumped=1
 }
 
 screen_inbox() { agent_picker inbox 'enter: jump · ctrl-r: refresh · esc: close' 'Nothing needs you. No blocked or finished agents.'; }

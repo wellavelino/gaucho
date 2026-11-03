@@ -11,6 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint
-        run: shellcheck -x -s bash -e SC2016,SC2088,SC1010,SC1007 core/gaucho core/ui core/runtimes/* core/forges/* core/sources/* core/detectors/* core/land-actions/* tests/run tests/runtimes/fake
+        run: shellcheck -x -s bash -e SC2016,SC2088,SC1010,SC1007 core/gaucho core/ui core/hub core/runtimes/* core/forges/* core/sources/* core/detectors/* core/land-actions/* tests/run tests/runtimes/fake
       - name: Test
         run: tests/run
